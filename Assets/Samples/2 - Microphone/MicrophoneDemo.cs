@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 using Whisper.Utils;
@@ -9,130 +10,647 @@ namespace Whisper.Samples
 {
     public class MicrophoneDemo : MonoBehaviour
     {
+        // ============================================================
+        // WHISPER
+        // ============================================================
+
+        [Header("Whisper")]
         public WhisperManager whisper;
         public MicrophoneRecord microphoneRecord;
 
-        // Drag DemoChat here
+
+        // ============================================================
+        // OLLAMA
+        // ============================================================
+
+        [Header("Ollama")]
         public DemoChat demoChat;
 
+
+        // ============================================================
+        // WAKE WORD
+        // ============================================================
+
+        [Header("OpenWakeWord")]
+        public OpenWakeWordManager openWakeWordManager;
+
+
+        // ============================================================
+        // RECORDING
+        // ============================================================
+
+        [Header("Recording")]
         public bool streamSegments = true;
         public bool printLanguage = true;
+
+
+        // ============================================================
+        // CONVERSATION
+        // ============================================================
+
+        [Header("Conversation")]
+        public float conversationTimeout = 8f;
+
+
+        // ============================================================
+        // UI
+        // ============================================================
 
         [Header("UI")]
         public Button button;
         public Text buttonText;
         public Text outputText;
         public Text timeText;
+        public Text wakeWordStatusText;
         public Dropdown languageDropdown;
         public Toggle translateToggle;
         public Toggle vadToggle;
         public ScrollRect scroll;
 
+
+        // ============================================================
+        // INTERNAL STATE
+        // ============================================================
+
         private string _buffer;
+
+        private bool _processingSpeech;
+
+        private bool _conversationMode;
+
+        private bool _startingRecording;
+
+        private Coroutine _conversationTimeoutCoroutine;
+
+
+        // ============================================================
+        // AWAKE
+        // ============================================================
 
         private void Awake()
         {
-            whisper.OnNewSegment += OnNewSegment;
-            whisper.OnProgress += OnProgressHandler;
-
-            microphoneRecord.OnRecordStop += OnRecordStop;
-
-            button.onClick.AddListener(OnButtonPressed);
-
-            languageDropdown.value = languageDropdown.options.FindIndex(
-                op => op.text == whisper.language);
-
-            languageDropdown.onValueChanged.AddListener(OnLanguageChanged);
-
-            translateToggle.isOn = whisper.translateToEnglish;
-            translateToggle.onValueChanged.AddListener(OnTranslateChanged);
-
-            vadToggle.isOn = microphoneRecord.vadStop;
-            vadToggle.onValueChanged.AddListener(OnVadChanged);
-        }
-
-        private void OnVadChanged(bool value)
-        {
-            microphoneRecord.vadStop = value;
-        }
-
-        private void OnButtonPressed()
-        {
-            if (!microphoneRecord.IsRecording)
+            if (whisper != null)
             {
-                microphoneRecord.StartRecord();
-                buttonText.text = "Stop";
+                whisper.OnNewSegment += OnNewSegment;
+                whisper.OnProgress += OnProgressHandler;
             }
-            else
+
+            if (microphoneRecord != null)
             {
-                microphoneRecord.StopRecord();
-                buttonText.text = "Record";
+                microphoneRecord.OnRecordStop += OnRecordStop;
+            }
+
+            if (openWakeWordManager != null)
+            {
+                openWakeWordManager.WakeWordDetected +=
+                    OnWakeWordDetected;
+            }
+
+            if (languageDropdown != null && whisper != null)
+            {
+                int index =
+                    languageDropdown.options.FindIndex(
+                        op => op.text == whisper.language);
+
+                if (index >= 0)
+                {
+                    languageDropdown.value = index;
+                }
+
+                languageDropdown.onValueChanged.AddListener(
+                    OnLanguageChanged);
+            }
+
+            if (translateToggle != null && whisper != null)
+            {
+                translateToggle.isOn =
+                    whisper.translateToEnglish;
+
+                translateToggle.onValueChanged.AddListener(
+                    OnTranslateChanged);
+            }
+
+            if (vadToggle != null && microphoneRecord != null)
+            {
+                vadToggle.isOn =
+                    microphoneRecord.vadStop;
+
+                vadToggle.onValueChanged.AddListener(
+                    OnVadChanged);
+            }
+
+            if (button != null)
+            {
+                button.interactable = false;
+            }
+
+            if (buttonText != null)
+            {
+                buttonText.text = "Say \"alexa\"";
             }
         }
 
-        private async void OnRecordStop(AudioChunk recordedAudio)
+
+        // ============================================================
+        // START
+        // ============================================================
+
+        private void Start()
         {
-            buttonText.text = "Record";
-            _buffer = "";
+            SetWakeWordStatus(
+                "Listening for \"alexa\"");
 
-            Stopwatch sw = new Stopwatch();
-            sw.Start();
+            if (openWakeWordManager != null)
+            {
+                openWakeWordManager.StartListening();
+            }
+        }
 
-            var res = await whisper.GetTextAsync(
-                recordedAudio.Data,
-                recordedAudio.Frequency,
-                recordedAudio.Channels);
 
-            if (res == null)
+        // ============================================================
+        // WAKE WORD DETECTED
+        // ============================================================
+
+        private void OnWakeWordDetected(
+            SentisModels.WakeWordDetection detection)
+        {
+            if (_conversationMode)
                 return;
 
-            var time = sw.ElapsedMilliseconds;
-            var rate = recordedAudio.Length / (time * 0.001f);
+            if (_processingSpeech || _startingRecording)
+                return;
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Alexa detected: " +
+                detection.Name +
+                " score=" +
+                detection.Probability.ToString("F3"));
+
+            _conversationMode = true;
+
+            StopConversationTimeout();
+
+            SetWakeWordStatus(
+                "Listening for your question...");
+
+            if (buttonText != null)
+            {
+                buttonText.text = "Listening...";
+            }
+
+            StartCommandRecording();
+        }
+
+
+        // ============================================================
+        // START COMMAND RECORDING
+        // ============================================================
+
+        private void StartCommandRecording()
+        {
+            if (!_conversationMode)
+                return;
+
+            if (microphoneRecord == null)
+            {
+                UnityEngine.Debug.LogError(
+                    "[MicrophoneDemo] MicrophoneRecord is not assigned.");
+
+                ExitConversationMode();
+                return;
+            }
+
+            if (_processingSpeech || _startingRecording)
+                return;
+
+            if (microphoneRecord.IsRecording)
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] MicrophoneRecord is already recording.");
+
+                return;
+            }
+
+            _startingRecording = true;
+            _processingSpeech = true;
+
+            StopConversationTimeout();
+
+            SetWakeWordStatus("Listening...");
+
+            if (buttonText != null)
+            {
+                buttonText.text = "Listening...";
+            }
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Starting command recording.");
+
+            microphoneRecord.StartRecord();
+
+            _startingRecording = false;
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Command recording started.");
+        }
+
+
+        // ============================================================
+        // RECORDING STOPPED
+        // ============================================================
+
+        private async void OnRecordStop(
+            AudioChunk recordedAudio)
+        {
+            if (!_processingSpeech)
+                return;
+
+            _processingSpeech = false;
+
+            _buffer = "";
+
+            SetWakeWordStatus("Transcribing...");
+
+            if (buttonText != null)
+            {
+                buttonText.text = "Transcribing...";
+            }
+
+            if (whisper == null)
+            {
+                UnityEngine.Debug.LogError(
+                    "[MicrophoneDemo] WhisperManager is not assigned.");
+
+                ExitConversationMode();
+                return;
+            }
+
+            // --------------------------------------------------------
+            // WHISPER TIMING
+            // --------------------------------------------------------
+
+            Stopwatch whisperTimer =
+                Stopwatch.StartNew();
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Whisper starting...");
+
+            var res =
+                await whisper.GetTextAsync(
+                    recordedAudio.Data,
+                    recordedAudio.Frequency,
+                    recordedAudio.Channels);
+
+            whisperTimer.Stop();
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Whisper finished in " +
+                whisperTimer.ElapsedMilliseconds +
+                " ms");
+
+
+            // --------------------------------------------------------
+            // NULL RESULT
+            // --------------------------------------------------------
+
+            if (res == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] Whisper returned null.");
+
+                ContinueConversation();
+                return;
+            }
+
+
+            // --------------------------------------------------------
+            // PERFORMANCE
+            // --------------------------------------------------------
+
+            long time =
+                whisperTimer.ElapsedMilliseconds;
+
+            float rate = 0f;
+
+            if (time > 0)
+            {
+                rate =
+                    recordedAudio.Length /
+                    (time * 0.001f);
+            }
 
             if (timeText != null)
             {
                 timeText.text =
-                    $"Time: {time} ms\nRate: {rate:F1}x";
+                    $"Whisper: {time} ms\n" +
+                    $"Rate: {rate:F1}x";
             }
 
-            string transcript = res.Result;
+
+            // --------------------------------------------------------
+            // TRANSCRIPT
+            // --------------------------------------------------------
+
+            string transcript =
+                res.Result.Trim();
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Whisper result: " +
+                transcript);
+
+
+            // --------------------------------------------------------
+            // EMPTY SPEECH
+            // --------------------------------------------------------
+
+            if (string.IsNullOrWhiteSpace(transcript))
+            {
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] Empty transcript.");
+
+                ContinueConversation();
+                return;
+            }
+
+
+            // --------------------------------------------------------
+            // DISPLAY TRANSCRIPT
+            // --------------------------------------------------------
+
+            string displayText =
+                transcript;
 
             if (printLanguage)
             {
-                transcript += $"\n\nLanguage: {res.Language}";
+                displayText +=
+                    $"\n\nLanguage: {res.Language}";
             }
 
             if (outputText != null)
             {
-                outputText.text = transcript;
+                outputText.text =
+                    displayText;
             }
 
             UiUtils.ScrollDown(scroll);
 
-            // Send ONLY the transcript to Ollama
+
+            // --------------------------------------------------------
+            // SEND TO QWEN3 IMMEDIATELY
+            // --------------------------------------------------------
+
             if (demoChat != null)
             {
-                await demoChat.Ask(res.Result);
+                SetWakeWordStatus("Thinking...");
+
+                if (buttonText != null)
+                {
+                    buttonText.text = "Thinking...";
+                }
+
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] Sending to Ollama NOW: " +
+                    transcript);
+
+
+                Stopwatch ollamaTimer =
+                    Stopwatch.StartNew();
+
+
+                // IMPORTANT:
+                // No delay here.
+                // Whisper result goes directly to Qwen3.
+                await demoChat.Ask(transcript);
+
+
+                ollamaTimer.Stop();
+
+
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] Ollama finished in " +
+                    ollamaTimer.ElapsedMilliseconds +
+                    " ms");
+            }
+            else
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] DemoChat is not assigned.");
+            }
+
+
+            // --------------------------------------------------------
+            // LISTEN AGAIN
+            // --------------------------------------------------------
+
+            ContinueConversation();
+        }
+
+
+        // ============================================================
+        // CONTINUE CONVERSATION
+        // ============================================================
+
+        private void ContinueConversation()
+        {
+            if (!_conversationMode)
+                return;
+
+            StopConversationTimeout();
+
+            SetWakeWordStatus(
+                "Listening for your next question...");
+
+            if (buttonText != null)
+            {
+                buttonText.text = "Listening...";
+            }
+
+            StartCommandRecording();
+
+            // The timeout routine waits until the recording
+            // has actually stopped before counting the timeout.
+            StartConversationTimeout();
+        }
+
+
+        // ============================================================
+        // CONVERSATION TIMEOUT
+        // ============================================================
+
+        private void StartConversationTimeout()
+        {
+            StopConversationTimeout();
+
+            if (!_conversationMode)
+                return;
+
+            _conversationTimeoutCoroutine =
+                StartCoroutine(
+                    ConversationTimeoutRoutine());
+        }
+
+
+        private void StopConversationTimeout()
+        {
+            if (_conversationTimeoutCoroutine != null)
+            {
+                StopCoroutine(
+                    _conversationTimeoutCoroutine);
+
+                _conversationTimeoutCoroutine = null;
             }
         }
 
+
+        private IEnumerator ConversationTimeoutRoutine()
+        {
+            // --------------------------------------------------------
+            // Wait while recording/processing.
+            // --------------------------------------------------------
+
+            while (_processingSpeech ||
+                   _startingRecording)
+            {
+                yield return null;
+            }
+
+
+            // --------------------------------------------------------
+            // Wait for user to start another command.
+            // --------------------------------------------------------
+
+            float timer = 0f;
+
+            while (timer < conversationTimeout)
+            {
+                if (!_conversationMode)
+                    yield break;
+
+                // If recording starts, cancel this timeout.
+                if (_processingSpeech ||
+                    _startingRecording)
+                {
+                    yield break;
+                }
+
+                timer += Time.deltaTime;
+
+                yield return null;
+            }
+
+
+            // --------------------------------------------------------
+            // Exit conversation
+            // --------------------------------------------------------
+
+            if (!_processingSpeech &&
+                !_startingRecording &&
+                _conversationMode)
+            {
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] Conversation timeout.");
+
+                ExitConversationMode();
+            }
+        }
+
+
+        // ============================================================
+        // EXIT CONVERSATION
+        // ============================================================
+
+        private void ExitConversationMode()
+        {
+            StopConversationTimeout();
+
+            _conversationMode = false;
+            _processingSpeech = false;
+            _startingRecording = false;
+
+            SetWakeWordStatus(
+                "Listening for \"alexa\"");
+
+            if (buttonText != null)
+            {
+                buttonText.text = "Say \"alexa\"";
+            }
+
+            if (openWakeWordManager != null)
+            {
+                openWakeWordManager.StartListening();
+            }
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Conversation ended. " +
+                "Waiting for Alexa.");
+        }
+
+
+        // ============================================================
+        // VAD
+        // ============================================================
+
+        private void OnVadChanged(bool value)
+        {
+            if (microphoneRecord != null)
+            {
+                microphoneRecord.vadStop = value;
+            }
+        }
+
+
+        // ============================================================
+        // LANGUAGE
+        // ============================================================
+
         private void OnLanguageChanged(int index)
         {
-            whisper.language = languageDropdown.options[index].text;
+            if (whisper == null)
+                return;
+
+            if (languageDropdown == null)
+                return;
+
+            if (index < 0 ||
+                index >= languageDropdown.options.Count)
+                return;
+
+            whisper.language =
+                languageDropdown.options[index].text;
         }
+
+
+        // ============================================================
+        // TRANSLATION
+        // ============================================================
 
         private void OnTranslateChanged(bool translate)
         {
-            whisper.translateToEnglish = translate;
+            if (whisper != null)
+            {
+                whisper.translateToEnglish =
+                    translate;
+            }
         }
+
+
+        // ============================================================
+        // WHISPER PROGRESS
+        // ============================================================
 
         private void OnProgressHandler(int progress)
         {
             if (timeText != null)
             {
-                timeText.text = $"Progress: {progress}%";
+                timeText.text =
+                    $"Whisper Progress: {progress}%";
             }
         }
+
+
+        // ============================================================
+        // WHISPER SEGMENTS
+        // ============================================================
 
         private void OnNewSegment(WhisperSegment segment)
         {
@@ -143,9 +661,78 @@ namespace Whisper.Samples
                 return;
 
             _buffer += segment.Text;
-            outputText.text = _buffer + "...";
+
+            outputText.text =
+                _buffer + "...";
 
             UiUtils.ScrollDown(scroll);
+        }
+
+
+        // ============================================================
+        // STATUS
+        // ============================================================
+
+        private void SetWakeWordStatus(string status)
+        {
+            if (wakeWordStatusText != null)
+            {
+                wakeWordStatusText.text =
+                    status;
+            }
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] " +
+                status);
+        }
+
+
+        // ============================================================
+        // CLEANUP
+        // ============================================================
+
+        private void OnDestroy()
+        {
+            StopConversationTimeout();
+
+            if (whisper != null)
+            {
+                whisper.OnNewSegment -=
+                    OnNewSegment;
+
+                whisper.OnProgress -=
+                    OnProgressHandler;
+            }
+
+            if (microphoneRecord != null)
+            {
+                microphoneRecord.OnRecordStop -=
+                    OnRecordStop;
+            }
+
+            if (openWakeWordManager != null)
+            {
+                openWakeWordManager.WakeWordDetected -=
+                    OnWakeWordDetected;
+            }
+
+            if (languageDropdown != null)
+            {
+                languageDropdown.onValueChanged.RemoveListener(
+                    OnLanguageChanged);
+            }
+
+            if (translateToggle != null)
+            {
+                translateToggle.onValueChanged.RemoveListener(
+                    OnTranslateChanged);
+            }
+
+            if (vadToggle != null)
+            {
+                vadToggle.onValueChanged.RemoveListener(
+                    OnVadChanged);
+            }
         }
     }
 }

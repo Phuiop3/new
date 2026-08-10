@@ -831,7 +831,7 @@ PlayerSettings:
   webEnableSubmoduleStrippingCompatibility: 0
   scriptingDefineSymbols:
     Android: USE_INPUT_SYSTEM_POSE_CONTROL;USE_STICK_CONTROL_THUMBSTICKS
-    Standalone: USE_INPUT_SYSTEM_POSE_CONTROL;USE_STICK_CONTROL_THUMBSTICKS
+    Standalone: USE_INPUT_SYSTEM_POSE_CONTROL;USE_STICK_CONTROL_THUMBSTICKS;SENTIS_ANALYTICS_ENABLED;APP_UI_EDITOR_ONLY
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend:
@@ -931,10 +931,10 @@ PlayerSettings:
   activeInputHandler: 1
   windowsGamepadBackendHint: 0
   enableDirectStorage: 0
-  cloudProjectId: 838d4467-b468-4992-ad32-959b17d68412
+  cloudProjectId: 192e3205-9b1d-403d-9d22-5e0fda543dab
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: My project (7) 2026-07-31_23-24-26
+  projectName: My project (8) 2026-08-09_12-51-33
   organizationId: g9bcnmdddd
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
