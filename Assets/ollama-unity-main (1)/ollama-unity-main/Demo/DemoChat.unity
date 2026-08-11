@@ -532,6 +532,37 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 115284926}
   m_CullTransparentMesh: 1
+--- !u!1 &135106577
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 135106578}
+  m_Layer: 0
+  m_Name: Generated House
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &135106578
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 135106577}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 348.4285, y: -0, z: -331.5715}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &157075802
 GameObject:
   m_ObjectHideFlags: 0
@@ -1500,6 +1531,37 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 439367514}
   m_CullTransparentMesh: 1
+--- !u!1 &446653156
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 446653157}
+  m_Layer: 0
+  m_Name: house parent
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &446653157
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 446653156}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 348.4285, y: -0, z: -326.77}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &482147032
 GameObject:
   m_ObjectHideFlags: 0
@@ -1889,6 +1951,59 @@ MonoBehaviour:
   m_EffectColor: {r: 0.28627452, g: 0.3019608, b: 0.39215687, a: 1}
   m_EffectDistance: {x: 2, y: 2}
   m_UseGraphicAlpha: 1
+--- !u!1 &619035196
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 619035198}
+  - component: {fileID: 619035197}
+  m_Layer: 0
+  m_Name: floorplan
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &619035197
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 619035196}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ba47677cb509b4444b934a0b7e773569, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::FloorPlanDemo
+  floorPlan: {fileID: 2800000, guid: 15a8c56b533998e409804143e318d6c0, type: 3}
+  ollamaUrl: http://localhost:11434/api/chat
+  model: qwen3-vl
+  unityToolManager: {fileID: 1089031824}
+  outputText: {fileID: 0}
+  generateButton: {fileID: 0}
+  defaultWallHeight: 2.7
+  defaultWallThickness: 0.15
+  houseParent: {fileID: 446653157}
+--- !u!4 &619035198
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 619035196}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 348.4285, y: -0, z: -331.5715}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &640474644
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -3301,7 +3416,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e369e874c2ee7d547b704efdb5f3acda, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::UnityToolManager
-  generator: {fileID: 1071953539}
+  generatedHouseParent: {fileID: 446653157}
+  wallMaterial: {fileID: 0}
+  defaultWallHeight: 2.7
+  defaultWallThickness: 0.15
 --- !u!4 &1089031825
 Transform:
   m_ObjectHideFlags: 0
@@ -4219,7 +4337,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 64a35bc01d5337546b408e8a85115d86, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  demoModel: qwen3:4b
+  demoModel: qwen3-vl
   llmOutput: {fileID: 832344030}
   unityToolManager: {fileID: 1089031824}
 --- !u!114 &1499858000
@@ -4270,6 +4388,7 @@ MonoBehaviour:
   whisper: {fileID: 1499858000}
   microphoneRecord: {fileID: 1499858002}
   demoChat: {fileID: 1499857999}
+  floorPlanDemo: {fileID: 619035197}
   openWakeWordManager: {fileID: 2090527669}
   streamSegments: 1
   printLanguage: 1
@@ -6886,3 +7005,6 @@ SceneRoots:
   - {fileID: 2090527670}
   - {fileID: 1089031825}
   - {fileID: 1071953540}
+  - {fileID: 619035198}
+  - {fileID: 446653157}
+  - {fileID: 135106578}
