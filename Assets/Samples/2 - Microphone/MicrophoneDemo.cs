@@ -1,3 +1,4 @@
+
 using System.Diagnostics;
 using System.Collections;
 using UnityEngine;
@@ -22,21 +23,12 @@ namespace Whisper.Samples
 
 
         // ============================================================
-        // OLLAMA
+        // OLLAMA / AI HOUSE DESIGN
         // ============================================================
 
-        [Header("Ollama")]
+        [Header("AI House Designer")]
 
         public DemoChat demoChat;
-
-
-        // ============================================================
-        // FLOOR PLAN
-        // ============================================================
-
-        [Header("Floor Plan")]
-
-        public FloorPlanDemo floorPlanDemo;
 
 
         // ============================================================
@@ -60,11 +52,24 @@ namespace Whisper.Samples
 
 
         // ============================================================
+        // MAX RECORDING TIME
+        // ============================================================
+
+        [Header("Maximum Recording Time")]
+
+        [Tooltip("Maximum amount of time the microphone can record one command.")]
+        public float maxRecordingTime = 10f;
+
+        private Coroutine _recordingTimeoutCoroutine;
+
+
+        // ============================================================
         // CONVERSATION
         // ============================================================
 
         [Header("Conversation")]
 
+        [Tooltip("How long to wait before returning to wake-word mode.")]
         public float conversationTimeout = 8f;
 
 
@@ -114,6 +119,10 @@ namespace Whisper.Samples
 
         private void Awake()
         {
+            // --------------------------------------------------------
+            // Whisper
+            // --------------------------------------------------------
+
             if (whisper != null)
             {
                 whisper.OnNewSegment +=
@@ -124,6 +133,10 @@ namespace Whisper.Samples
             }
 
 
+            // --------------------------------------------------------
+            // Microphone
+            // --------------------------------------------------------
+
             if (microphoneRecord != null)
             {
                 microphoneRecord.OnRecordStop +=
@@ -131,12 +144,20 @@ namespace Whisper.Samples
             }
 
 
+            // --------------------------------------------------------
+            // Wake word
+            // --------------------------------------------------------
+
             if (openWakeWordManager != null)
             {
                 openWakeWordManager.WakeWordDetected +=
                     OnWakeWordDetected;
             }
 
+
+            // --------------------------------------------------------
+            // Language
+            // --------------------------------------------------------
 
             if (
                 languageDropdown != null &&
@@ -150,19 +171,21 @@ namespace Whisper.Samples
                             whisper.language
                     );
 
-
                 if (index >= 0)
                 {
                     languageDropdown.value =
                         index;
                 }
 
-
                 languageDropdown.onValueChanged.AddListener(
                     OnLanguageChanged
                 );
             }
 
+
+            // --------------------------------------------------------
+            // Translation
+            // --------------------------------------------------------
 
             if (
                 translateToggle != null &&
@@ -172,12 +195,15 @@ namespace Whisper.Samples
                 translateToggle.isOn =
                     whisper.translateToEnglish;
 
-
                 translateToggle.onValueChanged.AddListener(
                     OnTranslateChanged
                 );
             }
 
+
+            // --------------------------------------------------------
+            // VAD
+            // --------------------------------------------------------
 
             if (
                 vadToggle != null &&
@@ -187,12 +213,15 @@ namespace Whisper.Samples
                 vadToggle.isOn =
                     microphoneRecord.vadStop;
 
-
                 vadToggle.onValueChanged.AddListener(
                     OnVadChanged
                 );
             }
 
+
+            // --------------------------------------------------------
+            // Button
+            // --------------------------------------------------------
 
             if (button != null)
             {
@@ -219,10 +248,15 @@ namespace Whisper.Samples
                 "Listening for \"alexa\""
             );
 
-
             if (openWakeWordManager != null)
             {
                 openWakeWordManager.StartListening();
+            }
+            else
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] OpenWakeWordManager is not assigned."
+                );
             }
         }
 
@@ -237,7 +271,6 @@ namespace Whisper.Samples
             if (_conversationMode)
                 return;
 
-
             if (
                 _processingSpeech ||
                 _startingRecording
@@ -246,7 +279,7 @@ namespace Whisper.Samples
 
 
             UnityEngine.Debug.Log(
-                "[MicrophoneDemo] Alexa detected: " +
+                "[MicrophoneDemo] Wake word detected: " +
                 detection.Name +
                 " score=" +
                 detection.Probability.ToString("F3")
@@ -261,7 +294,7 @@ namespace Whisper.Samples
 
 
             SetWakeWordStatus(
-                "Listening for your question..."
+                "Listening for your command..."
             );
 
 
@@ -292,7 +325,6 @@ namespace Whisper.Samples
                     "[MicrophoneDemo] MicrophoneRecord is not assigned."
                 );
 
-
                 ExitConversationMode();
 
                 return;
@@ -309,7 +341,7 @@ namespace Whisper.Samples
             if (microphoneRecord.IsRecording)
             {
                 UnityEngine.Debug.LogWarning(
-                    "[MicrophoneDemo] MicrophoneRecord is already recording."
+                    "[MicrophoneDemo] Microphone is already recording."
                 );
 
                 return;
@@ -324,6 +356,8 @@ namespace Whisper.Samples
 
 
             StopConversationTimeout();
+
+            StopRecordingTimeout();
 
 
             SetWakeWordStatus(
@@ -343,6 +377,10 @@ namespace Whisper.Samples
             );
 
 
+            // --------------------------------------------------------
+            // START MICROPHONE
+            // --------------------------------------------------------
+
             microphoneRecord.StartRecord();
 
 
@@ -353,6 +391,112 @@ namespace Whisper.Samples
             UnityEngine.Debug.Log(
                 "[MicrophoneDemo] Command recording started."
             );
+
+
+            // --------------------------------------------------------
+            // START MAXIMUM RECORDING TIMER
+            // --------------------------------------------------------
+
+            if (maxRecordingTime > 0f)
+            {
+                _recordingTimeoutCoroutine =
+                    StartCoroutine(
+                        RecordingTimeoutRoutine()
+                    );
+            }
+        }
+
+
+        // ============================================================
+        // MAXIMUM RECORDING TIMER
+        // ============================================================
+
+        private IEnumerator RecordingTimeoutRoutine()
+        {
+            float timer =
+                0f;
+
+
+            while (
+                timer < maxRecordingTime &&
+                microphoneRecord != null &&
+                microphoneRecord.IsRecording
+            )
+            {
+                timer +=
+                    Time.deltaTime;
+
+
+                // Optional UI countdown
+
+                if (timeText != null)
+                {
+                    float remaining =
+                        Mathf.Max(
+                            0f,
+                            maxRecordingTime - timer
+                        );
+
+                    timeText.text =
+                        "Recording: " +
+                        remaining.ToString("F1") +
+                        "s";
+                }
+
+
+                yield return null;
+            }
+
+
+            // --------------------------------------------------------
+            // MAX TIME REACHED
+            // --------------------------------------------------------
+
+            if (
+                microphoneRecord != null &&
+                microphoneRecord.IsRecording
+            )
+            {
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] Maximum recording time reached: " +
+                    maxRecordingTime +
+                    " seconds."
+                );
+
+
+                SetWakeWordStatus(
+                    "Maximum recording time reached."
+                );
+
+
+                microphoneRecord.StopRecord();
+            }
+
+
+            _recordingTimeoutCoroutine =
+                null;
+        }
+
+
+        // ============================================================
+        // STOP RECORDING TIMER
+        // ============================================================
+
+        private void StopRecordingTimeout()
+        {
+            if (
+                _recordingTimeoutCoroutine !=
+                null
+            )
+            {
+                StopCoroutine(
+                    _recordingTimeoutCoroutine
+                );
+
+
+                _recordingTimeoutCoroutine =
+                    null;
+            }
         }
 
 
@@ -363,6 +507,15 @@ namespace Whisper.Samples
         private async void OnRecordStop(
             AudioChunk recordedAudio)
         {
+            // --------------------------------------------------------
+            // IMPORTANT:
+            // Stop the maximum recording timer because recording
+            // has already stopped.
+            // --------------------------------------------------------
+
+            StopRecordingTimeout();
+
+
             if (!_processingSpeech)
                 return;
 
@@ -392,7 +545,6 @@ namespace Whisper.Samples
                 UnityEngine.Debug.LogError(
                     "[MicrophoneDemo] WhisperManager is not assigned."
                 );
-
 
                 ExitConversationMode();
 
@@ -539,102 +691,25 @@ namespace Whisper.Samples
 
 
             // ========================================================
-            // COMMAND ROUTING
+            // SEND EVERYTHING TO AI
             // ========================================================
-
-            // --------------------------------------------------------
-            // FLOOR PLAN COMMAND
-            // --------------------------------------------------------
-
-            if (
-                IsHouseGenerationCommand(
-                    transcript
-                )
-            )
-            {
-                if (floorPlanDemo != null)
-                {
-                    SetWakeWordStatus(
-                        "Generating house from floor plan..."
-                    );
-
-
-                    if (buttonText != null)
-                    {
-                        buttonText.text =
-                            "Generating house...";
-                    }
-
-
-                    UnityEngine.Debug.Log(
-                        "[MicrophoneDemo] Floor plan command detected: " +
-                        transcript
-                    );
-
-
-                    // IMPORTANT:
-                    // Do not send this command to DemoChat.
-                    //
-                    // FloorPlanDemo itself sends the image
-                    // to Qwen3-VL.
-
-                    floorPlanDemo.GenerateHouse();
-
-
-                    // ------------------------------------------------
-                    // WAIT FOR HOUSE GENERATION
-                    // ------------------------------------------------
-                    //
-                    // Do NOT immediately call ContinueConversation().
-                    //
-                    // Qwen3-VL may take 50+ seconds.
-
-                    StartCoroutine(
-                        WaitForHouseGeneration()
-                    );
-
-
-                    return;
-                }
-                else
-                {
-                    UnityEngine.Debug.LogError(
-                        "[MicrophoneDemo] FloorPlanDemo is not assigned."
-                    );
-
-
-                    SetWakeWordStatus(
-                        "FloorPlanDemo is not assigned."
-                    );
-
-
-                    ContinueConversation();
-
-                    return;
-                }
-            }
-
-
-            // --------------------------------------------------------
-            // NORMAL OLLAMA QUESTION
-            // --------------------------------------------------------
 
             if (demoChat != null)
             {
                 SetWakeWordStatus(
-                    "Thinking..."
+                    "AI is designing..."
                 );
 
 
                 if (buttonText != null)
                 {
                     buttonText.text =
-                        "Thinking...";
+                        "Designing...";
                 }
 
 
                 UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] Sending to Ollama NOW: " +
+                    "[MicrophoneDemo] Sending command to AI: " +
                     transcript
                 );
 
@@ -652,14 +727,14 @@ namespace Whisper.Samples
 
 
                 UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] Ollama finished in " +
+                    "[MicrophoneDemo] AI finished in " +
                     ollamaTimer.ElapsedMilliseconds +
                     " ms"
                 );
             }
             else
             {
-                UnityEngine.Debug.LogWarning(
+                UnityEngine.Debug.LogError(
                     "[MicrophoneDemo] DemoChat is not assigned."
                 );
             }
@@ -670,117 +745,6 @@ namespace Whisper.Samples
             // ========================================================
 
             ContinueConversation();
-        }
-
-
-        // ============================================================
-        // HOUSE GENERATION WAIT
-        // ============================================================
-
-        private IEnumerator WaitForHouseGeneration()
-        {
-            UnityEngine.Debug.Log(
-                "[MicrophoneDemo] Waiting for floor-plan generation..."
-            );
-
-
-            while (
-                floorPlanDemo != null &&
-                floorPlanDemo.IsGenerating
-            )
-            {
-                yield return null;
-            }
-
-
-            UnityEngine.Debug.Log(
-                "[MicrophoneDemo] Floor-plan generation finished."
-            );
-
-
-            if (!_conversationMode)
-                yield break;
-
-
-            SetWakeWordStatus(
-                "House generated. Listening again..."
-            );
-
-
-            if (buttonText != null)
-            {
-                buttonText.text =
-                    "Listening...";
-            }
-
-
-            ContinueConversation();
-        }
-
-
-        // ============================================================
-        // HOUSE COMMAND DETECTION
-        // ============================================================
-
-        private bool IsHouseGenerationCommand(
-            string transcript)
-        {
-            if (
-                string.IsNullOrWhiteSpace(
-                    transcript
-                )
-            )
-            {
-                return false;
-            }
-
-
-            string command =
-                transcript
-                    .ToLower()
-                    .Trim();
-
-
-            return
-                command.Contains(
-                    "create the house"
-                ) ||
-
-                command.Contains(
-                    "create house"
-                ) ||
-
-                command.Contains(
-                    "generate the house"
-                ) ||
-
-                command.Contains(
-                    "generate house"
-                ) ||
-
-                command.Contains(
-                    "build the house"
-                ) ||
-
-                command.Contains(
-                    "build house"
-                ) ||
-
-                command.Contains(
-                    "generate this floor plan"
-                ) ||
-
-                command.Contains(
-                    "create this floor plan"
-                ) ||
-
-                command.Contains(
-                    "turn this floor plan into a house"
-                ) ||
-
-                command.Contains(
-                    "make the house"
-                );
         }
 
 
@@ -798,7 +762,7 @@ namespace Whisper.Samples
 
 
             SetWakeWordStatus(
-                "Listening for your next question..."
+                "Listening for your next command..."
             );
 
 
@@ -931,6 +895,21 @@ namespace Whisper.Samples
         {
             StopConversationTimeout();
 
+            StopRecordingTimeout();
+
+
+            // --------------------------------------------------------
+            // If microphone is still recording, stop it.
+            // --------------------------------------------------------
+
+            if (
+                microphoneRecord != null &&
+                microphoneRecord.IsRecording
+            )
+            {
+                microphoneRecord.StopRecord();
+            }
+
 
             _conversationMode =
                 false;
@@ -964,7 +943,7 @@ namespace Whisper.Samples
 
             UnityEngine.Debug.Log(
                 "[MicrophoneDemo] Conversation ended. " +
-                "Waiting for Alexa."
+                "Waiting for wake word."
             );
         }
 
@@ -1104,6 +1083,17 @@ namespace Whisper.Samples
         {
             StopConversationTimeout();
 
+            StopRecordingTimeout();
+
+
+            if (
+                microphoneRecord != null &&
+                microphoneRecord.IsRecording
+            )
+            {
+                microphoneRecord.StopRecord();
+            }
+
 
             if (whisper != null)
             {
@@ -1155,3 +1145,4 @@ namespace Whisper.Samples
         }
     }
 }
+
