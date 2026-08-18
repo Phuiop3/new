@@ -1,4 +1,4 @@
-
+﻿using System;
 using System.Diagnostics;
 using System.Collections;
 using UnityEngine;
@@ -23,7 +23,7 @@ namespace Whisper.Samples
 
 
         // ============================================================
-        // OLLAMA / AI HOUSE DESIGN
+        // OLLAMA / AI
         // ============================================================
 
         [Header("AI House Designer")]
@@ -51,16 +51,10 @@ namespace Whisper.Samples
         public bool printLanguage = true;
 
 
-        // ============================================================
-        // MAX RECORDING TIME
-        // ============================================================
-
-        [Header("Maximum Recording Time")]
-
-        [Tooltip("Maximum amount of time the microphone can record one command.")]
+        [Tooltip(
+            "Maximum amount of time the microphone can record one command."
+        )]
         public float maxRecordingTime = 10f;
-
-        private Coroutine _recordingTimeoutCoroutine;
 
 
         // ============================================================
@@ -69,7 +63,9 @@ namespace Whisper.Samples
 
         [Header("Conversation")]
 
-        [Tooltip("How long to wait before returning to wake-word mode.")]
+        [Tooltip(
+            "How long to wait for another wake word after AI finishes."
+        )]
         public float conversationTimeout = 8f;
 
 
@@ -99,18 +95,40 @@ namespace Whisper.Samples
 
 
         // ============================================================
-        // INTERNAL STATE
+        // STATE MACHINE
         // ============================================================
 
-        private string _buffer;
+        private enum AssistantState
+        {
+            WaitingForWakeWord,
+            Recording,
+            Transcribing,
+            AIProcessing,
+            Exiting
+        }
 
-        private bool _processingSpeech;
+        private AssistantState _state =
+            AssistantState.WaitingForWakeWord;
 
-        private bool _conversationMode;
 
-        private bool _startingRecording;
+        // ============================================================
+        // INTERNAL DATA
+        // ============================================================
+
+        private string _buffer = "";
+
+        private Coroutine _recordingTimeoutCoroutine;
 
         private Coroutine _conversationTimeoutCoroutine;
+
+
+        // ============================================================
+        // PROTECTION FLAGS
+        // ============================================================
+
+        private bool _recordStopBeingProcessed;
+
+        private bool _destroying;
 
 
         // ============================================================
@@ -225,8 +243,7 @@ namespace Whisper.Samples
 
             if (button != null)
             {
-                button.interactable =
-                    false;
+                button.interactable = false;
             }
 
 
@@ -244,20 +261,181 @@ namespace Whisper.Samples
 
         private void Start()
         {
+            if (_destroying)
+                return;
+
+
+            ChangeState(
+                AssistantState.WaitingForWakeWord
+            );
+
+
             SetWakeWordStatus(
                 "Listening for \"alexa\""
             );
 
-            if (openWakeWordManager != null)
+
+            StartWakeWordListening();
+        }
+
+
+        // ============================================================
+        // STATE CHANGE
+        // ============================================================
+
+        private void ChangeState(
+            AssistantState newState
+        )
+        {
+            if (_destroying)
+                return;
+
+
+            AssistantState oldState =
+                _state;
+
+
+            _state =
+                newState;
+
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] State: " +
+                oldState +
+                " -> " +
+                newState
+            );
+
+
+            switch (newState)
             {
-                openWakeWordManager.StartListening();
+                // ----------------------------------------------------
+                // WAITING
+                // ----------------------------------------------------
+
+                case AssistantState.WaitingForWakeWord:
+
+                    SetWakeWordStatus(
+                        "Listening for \"alexa\""
+                    );
+
+                    if (buttonText != null)
+                    {
+                        buttonText.text =
+                            "Say \"alexa\"";
+                    }
+
+                    break;
+
+
+                // ----------------------------------------------------
+                // RECORDING
+                // ----------------------------------------------------
+
+                case AssistantState.Recording:
+
+                    SetWakeWordStatus(
+                        "Listening..."
+                    );
+
+                    if (buttonText != null)
+                    {
+                        buttonText.text =
+                            "Listening...";
+                    }
+
+                    break;
+
+
+                // ----------------------------------------------------
+                // TRANSCRIBING
+                // ----------------------------------------------------
+
+                case AssistantState.Transcribing:
+
+                    SetWakeWordStatus(
+                        "Transcribing..."
+                    );
+
+                    if (buttonText != null)
+                    {
+                        buttonText.text =
+                            "Transcribing...";
+                    }
+
+                    break;
+
+
+                // ----------------------------------------------------
+                // AI
+                // ----------------------------------------------------
+
+                case AssistantState.AIProcessing:
+
+                    SetWakeWordStatus(
+                        "AI is designing..."
+                    );
+
+                    if (buttonText != null)
+                    {
+                        buttonText.text =
+                            "Designing...";
+                    }
+
+                    break;
+
+
+                // ----------------------------------------------------
+                // EXITING
+                // ----------------------------------------------------
+
+                case AssistantState.Exiting:
+
+                    SetWakeWordStatus(
+                        "Returning to wake-word mode..."
+                    );
+
+                    break;
             }
-            else
+        }
+
+
+        // ============================================================
+        // START WAKE WORD LISTENING
+        // ============================================================
+
+        private void StartWakeWordListening()
+        {
+            if (_destroying)
+                return;
+
+
+            if (
+                _state !=
+                AssistantState.WaitingForWakeWord
+            )
+            {
+                return;
+            }
+
+
+            if (openWakeWordManager == null)
             {
                 UnityEngine.Debug.LogWarning(
-                    "[MicrophoneDemo] OpenWakeWordManager is not assigned."
+                    "[MicrophoneDemo] " +
+                    "OpenWakeWordManager is not assigned."
                 );
+
+                return;
             }
+
+
+            openWakeWordManager.StartListening();
+
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Wake-word listening started."
+            );
         }
 
 
@@ -266,16 +444,40 @@ namespace Whisper.Samples
         // ============================================================
 
         private void OnWakeWordDetected(
-            SentisModels.WakeWordDetection detection)
+            SentisModels.WakeWordDetection detection
+        )
         {
-            if (_conversationMode)
+            if (_destroying)
                 return;
 
+
+            // --------------------------------------------------------
+            // CRITICAL:
+            //
+            // Only accept wake word while completely idle.
+            //
+            // This prevents wake-word detection from interrupting:
+            //
+            // Recording
+            // Whisper
+            // Ollama
+            // Terrain generation
+            // Tree generation
+            // --------------------------------------------------------
+
             if (
-                _processingSpeech ||
-                _startingRecording
+                _state !=
+                AssistantState.WaitingForWakeWord
             )
+            {
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] Wake word ignored " +
+                    "because state is " +
+                    _state
+                );
+
                 return;
+            }
 
 
             UnityEngine.Debug.Log(
@@ -286,26 +488,44 @@ namespace Whisper.Samples
             );
 
 
-            _conversationMode =
-                true;
+            // --------------------------------------------------------
+            // Stop wake-word listening.
+            //
+            // This is important.
+            //
+            // We do NOT want wake-word detection running while
+            // the user is giving the actual command.
+            // --------------------------------------------------------
+
+            StopWakeWordListening();
 
 
-            StopConversationTimeout();
-
-
-            SetWakeWordStatus(
-                "Listening for your command..."
-            );
-
-
-            if (buttonText != null)
-            {
-                buttonText.text =
-                    "Listening...";
-            }
-
+            // --------------------------------------------------------
+            // Start recording
+            // --------------------------------------------------------
 
             StartCommandRecording();
+        }
+
+
+        // ============================================================
+        // STOP WAKE WORD LISTENING
+        // ============================================================
+
+        private void StopWakeWordListening()
+        {
+            if (openWakeWordManager == null)
+                return;
+
+
+            // Depending on the version of the OpenWakeWord package,
+            // StartListening() may simply remain active internally.
+            //
+            // We therefore primarily protect against wake-word
+            // callbacks through the state machine.
+            //
+            // Do not call an assumed StopListening() method here
+            // because different package versions expose different APIs.
         }
 
 
@@ -315,61 +535,77 @@ namespace Whisper.Samples
 
         private void StartCommandRecording()
         {
-            if (!_conversationMode)
+            if (_destroying)
                 return;
 
+
+            // --------------------------------------------------------
+            // Only start from WAITING state.
+            // --------------------------------------------------------
+
+            if (
+                _state !=
+                AssistantState.WaitingForWakeWord
+            )
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] " +
+                    "StartCommandRecording ignored. State = " +
+                    _state
+                );
+
+                return;
+            }
+
+
+            // --------------------------------------------------------
+            // Microphone must exist.
+            // --------------------------------------------------------
 
             if (microphoneRecord == null)
             {
                 UnityEngine.Debug.LogError(
-                    "[MicrophoneDemo] MicrophoneRecord is not assigned."
+                    "[MicrophoneDemo] " +
+                    "MicrophoneRecord is not assigned."
                 );
-
-                ExitConversationMode();
 
                 return;
             }
 
 
-            if (
-                _processingSpeech ||
-                _startingRecording
-            )
-                return;
-
+            // --------------------------------------------------------
+            // Prevent duplicate recording.
+            // --------------------------------------------------------
 
             if (microphoneRecord.IsRecording)
             {
                 UnityEngine.Debug.LogWarning(
-                    "[MicrophoneDemo] Microphone is already recording."
+                    "[MicrophoneDemo] " +
+                    "Microphone is already recording."
                 );
 
                 return;
             }
 
 
-            _startingRecording =
-                true;
+            // --------------------------------------------------------
+            // Change state BEFORE starting microphone.
+            //
+            // This prevents callbacks from seeing the wrong state.
+            // --------------------------------------------------------
 
-            _processingSpeech =
-                true;
-
-
-            StopConversationTimeout();
-
-            StopRecordingTimeout();
-
-
-            SetWakeWordStatus(
-                "Listening..."
+            ChangeState(
+                AssistantState.Recording
             );
 
 
-            if (buttonText != null)
-            {
-                buttonText.text =
-                    "Listening...";
-            }
+            _buffer =
+                "";
+
+
+            StopRecordingTimeout();
+
+            StopConversationTimeout();
 
 
             UnityEngine.Debug.Log(
@@ -384,17 +620,13 @@ namespace Whisper.Samples
             microphoneRecord.StartRecord();
 
 
-            _startingRecording =
-                false;
-
-
             UnityEngine.Debug.Log(
                 "[MicrophoneDemo] Command recording started."
             );
 
 
             // --------------------------------------------------------
-            // START MAXIMUM RECORDING TIMER
+            // MAX RECORDING TIMER
             // --------------------------------------------------------
 
             if (maxRecordingTime > 0f)
@@ -413,12 +645,13 @@ namespace Whisper.Samples
 
         private IEnumerator RecordingTimeoutRoutine()
         {
-            float timer =
-                0f;
+            float timer = 0f;
 
 
             while (
-                timer < maxRecordingTime &&
+                !_destroying &&
+                _state ==
+                    AssistantState.Recording &&
                 microphoneRecord != null &&
                 microphoneRecord.IsRecording
             )
@@ -426,8 +659,6 @@ namespace Whisper.Samples
                 timer +=
                     Time.deltaTime;
 
-
-                // Optional UI countdown
 
                 if (timeText != null)
                 {
@@ -437,6 +668,7 @@ namespace Whisper.Samples
                             maxRecordingTime - timer
                         );
 
+
                     timeText.text =
                         "Recording: " +
                         remaining.ToString("F1") +
@@ -444,32 +676,33 @@ namespace Whisper.Samples
                 }
 
 
+                if (
+                    timer >=
+                    maxRecordingTime
+                )
+                {
+                    UnityEngine.Debug.Log(
+                        "[MicrophoneDemo] " +
+                        "Maximum recording time reached: " +
+                        maxRecordingTime +
+                        " seconds."
+                    );
+
+
+                    if (
+                        microphoneRecord != null &&
+                        microphoneRecord.IsRecording
+                    )
+                    {
+                        microphoneRecord.StopRecord();
+                    }
+
+
+                    break;
+                }
+
+
                 yield return null;
-            }
-
-
-            // --------------------------------------------------------
-            // MAX TIME REACHED
-            // --------------------------------------------------------
-
-            if (
-                microphoneRecord != null &&
-                microphoneRecord.IsRecording
-            )
-            {
-                UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] Maximum recording time reached: " +
-                    maxRecordingTime +
-                    " seconds."
-                );
-
-
-                SetWakeWordStatus(
-                    "Maximum recording time reached."
-                );
-
-
-                microphoneRecord.StopRecord();
             }
 
 
@@ -479,7 +712,7 @@ namespace Whisper.Samples
 
 
         // ============================================================
-        // STOP RECORDING TIMER
+        // STOP RECORDING TIMEOUT
         // ============================================================
 
         private void StopRecordingTimeout()
@@ -505,56 +738,175 @@ namespace Whisper.Samples
         // ============================================================
 
         private async void OnRecordStop(
-            AudioChunk recordedAudio)
+            AudioChunk recordedAudio
+        )
         {
+            if (_destroying)
+                return;
+
+
             // --------------------------------------------------------
             // IMPORTANT:
-            // Stop the maximum recording timer because recording
-            // has already stopped.
+            //
+            // AudioChunk is a struct/value type in this package.
+            //
+            // Therefore DO NOT do:
+            //
+            // recordedAudio == null
+            //
+            // That caused your CS0019 error.
+            // --------------------------------------------------------
+
+
+            // --------------------------------------------------------
+            // Stop timer immediately.
             // --------------------------------------------------------
 
             StopRecordingTimeout();
 
 
-            if (!_processingSpeech)
+            // --------------------------------------------------------
+            // Only process OnRecordStop if we were actually recording.
+            //
+            // This prevents duplicate callbacks from being processed.
+            // --------------------------------------------------------
+
+            if (
+                _state !=
+                AssistantState.Recording
+            )
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] " +
+                    "OnRecordStop ignored because state is " +
+                    _state
+                );
+
                 return;
+            }
 
 
-            _processingSpeech =
-                false;
+            // --------------------------------------------------------
+            // Prevent duplicate async processing.
+            // --------------------------------------------------------
+
+            if (_recordStopBeingProcessed)
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] " +
+                    "Duplicate OnRecordStop ignored."
+                );
+
+                return;
+            }
+
+
+            _recordStopBeingProcessed =
+                true;
+
+
+            // --------------------------------------------------------
+            // Change state BEFORE doing anything asynchronous.
+            // --------------------------------------------------------
+
+            ChangeState(
+                AssistantState.Transcribing
+            );
 
 
             _buffer =
                 "";
 
 
-            SetWakeWordStatus(
-                "Transcribing..."
-            );
+            // ========================================================
+            // BASIC AUDIO VALIDATION
+            // ========================================================
 
-
-            if (buttonText != null)
+            if (
+                recordedAudio.Data == null ||
+                recordedAudio.Data.Length == 0
+            )
             {
-                buttonText.text =
-                    "Transcribing...";
+                UnityEngine.Debug.LogWarning(
+                    "[MicrophoneDemo] " +
+                    "Recorded audio contains no data."
+                );
+
+
+                _recordStopBeingProcessed =
+                    false;
+
+
+                ReturnToWakeWordMode();
+
+
+                return;
             }
 
 
-            if (whisper == null)
+            // --------------------------------------------------------
+            // Very short recordings are usually accidental.
+            // --------------------------------------------------------
+
+            float audioLength =
+                recordedAudio.Length;
+
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] Recorded audio length: " +
+                audioLength.ToString("F2") +
+                " seconds."
+            );
+
+
+            if (audioLength < 0.25f)
             {
-                UnityEngine.Debug.LogError(
-                    "[MicrophoneDemo] WhisperManager is not assigned."
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] " +
+                    "Recording too short. Ignoring."
                 );
 
-                ExitConversationMode();
+
+                if (timeText != null)
+                {
+                    timeText.text =
+                        "Recording too short.";
+                }
+
+
+                _recordStopBeingProcessed =
+                    false;
+
+
+                ReturnToWakeWordMode();
+
 
                 return;
             }
 
 
             // ========================================================
-            // WHISPER TIMING
+            // WHISPER
             // ========================================================
+
+            if (whisper == null)
+            {
+                UnityEngine.Debug.LogError(
+                    "[MicrophoneDemo] " +
+                    "WhisperManager is not assigned."
+                );
+
+
+                _recordStopBeingProcessed =
+                    false;
+
+
+                ReturnToWakeWordMode();
+
+
+                return;
+            }
+
 
             Stopwatch whisperTimer =
                 Stopwatch.StartNew();
@@ -565,12 +917,35 @@ namespace Whisper.Samples
             );
 
 
-            var res =
-                await whisper.GetTextAsync(
-                    recordedAudio.Data,
-                    recordedAudio.Frequency,
-                    recordedAudio.Channels
+            Whisper.WhisperResult res = null;
+
+
+            try
+            {
+                res =
+                    await whisper.GetTextAsync(
+                        recordedAudio.Data,
+                        recordedAudio.Frequency,
+                        recordedAudio.Channels
+                    );
+            }
+            catch (Exception exception)
+            {
+                UnityEngine.Debug.LogError(
+                    "[MicrophoneDemo] Whisper exception:\n" +
+                    exception
                 );
+
+
+                _recordStopBeingProcessed =
+                    false;
+
+
+                ReturnToWakeWordMode();
+
+
+                return;
+            }
 
 
             whisperTimer.Stop();
@@ -584,17 +959,23 @@ namespace Whisper.Samples
 
 
             // ========================================================
-            // NULL RESULT
+            // WHISPER RESULT VALIDATION
             // ========================================================
 
             if (res == null)
             {
                 UnityEngine.Debug.LogWarning(
-                    "[MicrophoneDemo] Whisper returned null."
+                    "[MicrophoneDemo] " +
+                    "Whisper returned null."
                 );
 
 
-                ContinueConversation();
+                _recordStopBeingProcessed =
+                    false;
+
+
+                ReturnToWakeWordMode();
+
 
                 return;
             }
@@ -633,12 +1014,24 @@ namespace Whisper.Samples
             // ========================================================
 
             string transcript =
-                res.Result.Trim();
+                res.Result;
+
+
+            if (transcript == null)
+            {
+                transcript =
+                    "";
+            }
+
+
+            transcript =
+                transcript.Trim();
 
 
             UnityEngine.Debug.Log(
-                "[MicrophoneDemo] Whisper result: " +
-                transcript
+                "[MicrophoneDemo] Whisper result: [" +
+                transcript +
+                "]"
             );
 
 
@@ -653,11 +1046,24 @@ namespace Whisper.Samples
             )
             {
                 UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] Empty transcript."
+                    "[MicrophoneDemo] " +
+                    "Empty transcript. AI will NOT be called."
                 );
 
 
-                ContinueConversation();
+                if (outputText != null)
+                {
+                    outputText.text =
+                        "I didn't hear a command.";
+                }
+
+
+                _recordStopBeingProcessed =
+                    false;
+
+
+                ReturnToWakeWordMode();
+
 
                 return;
             }
@@ -674,7 +1080,8 @@ namespace Whisper.Samples
             if (printLanguage)
             {
                 displayText +=
-                    $"\n\nLanguage: {res.Language}";
+                    "\n\nLanguage: " +
+                    res.Language;
             }
 
 
@@ -691,92 +1098,185 @@ namespace Whisper.Samples
 
 
             // ========================================================
-            // SEND EVERYTHING TO AI
+            // AI
             // ========================================================
 
-            if (demoChat != null)
+            if (demoChat == null)
             {
-                SetWakeWordStatus(
-                    "AI is designing..."
+                UnityEngine.Debug.LogError(
+                    "[MicrophoneDemo] " +
+                    "DemoChat is not assigned."
                 );
 
 
-                if (buttonText != null)
-                {
-                    buttonText.text =
-                        "Designing...";
-                }
+                _recordStopBeingProcessed =
+                    false;
 
 
-                UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] Sending command to AI: " +
-                    transcript
-                );
+                ReturnToWakeWordMode();
 
 
-                Stopwatch ollamaTimer =
-                    Stopwatch.StartNew();
+                return;
+            }
 
 
+            // --------------------------------------------------------
+            // CRITICAL:
+            //
+            // The microphone is NOT restarted here.
+            //
+            // We remain in AIProcessing until DemoChat.Ask()
+            // completely finishes.
+            // --------------------------------------------------------
+
+            ChangeState(
+                AssistantState.AIProcessing
+            );
+
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] " +
+                "Sending command to AI: " +
+                transcript
+            );
+
+
+            Stopwatch ollamaTimer =
+                Stopwatch.StartNew();
+
+
+            try
+            {
                 await demoChat.Ask(
                     transcript
                 );
-
-
-                ollamaTimer.Stop();
-
-
-                UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] AI finished in " +
-                    ollamaTimer.ElapsedMilliseconds +
-                    " ms"
-                );
             }
-            else
+            catch (Exception exception)
             {
                 UnityEngine.Debug.LogError(
-                    "[MicrophoneDemo] DemoChat is not assigned."
+                    "[MicrophoneDemo] " +
+                    "DemoChat exception:\n" +
+                    exception
                 );
             }
 
 
+            ollamaTimer.Stop();
+
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] AI finished in " +
+                ollamaTimer.ElapsedMilliseconds +
+                " ms"
+            );
+
+
             // ========================================================
-            // LISTEN AGAIN
+            // AI COMPLETELY FINISHED
             // ========================================================
 
-            ContinueConversation();
+            _recordStopBeingProcessed =
+                false;
+
+
+            // --------------------------------------------------------
+            // ONLY NOW return to wake-word mode.
+            //
+            // This means:
+            //
+            // Terrain generation finished
+            // OR
+            // Tree generation finished
+            // OR
+            // AI error finished
+            //
+            // BEFORE microphone starts again.
+            // --------------------------------------------------------
+
+            ReturnToWakeWordMode();
         }
 
 
         // ============================================================
-        // CONTINUE CONVERSATION
+        // RETURN TO WAKE WORD MODE
         // ============================================================
 
-        private void ContinueConversation()
+        private void ReturnToWakeWordMode()
         {
-            if (!_conversationMode)
+            if (_destroying)
                 return;
+
+
+            StopRecordingTimeout();
 
 
             StopConversationTimeout();
 
 
-            SetWakeWordStatus(
-                "Listening for your next command..."
-            );
+            // --------------------------------------------------------
+            // Safety:
+            //
+            // If the microphone is somehow still recording,
+            // stop it before returning to wake-word mode.
+            // --------------------------------------------------------
 
-
-            if (buttonText != null)
+            if (
+                microphoneRecord != null &&
+                microphoneRecord.IsRecording
+            )
             {
-                buttonText.text =
-                    "Listening...";
+                UnityEngine.Debug.Log(
+                    "[MicrophoneDemo] " +
+                    "Stopping microphone before wake-word mode."
+                );
+
+
+                microphoneRecord.StopRecord();
+
+
+                // ----------------------------------------------------
+                // IMPORTANT:
+                //
+                // Do NOT immediately start recording here.
+                //
+                // OnRecordStop may be invoked by StopRecord().
+                //
+                // We simply change state and let the callback finish.
+                // ----------------------------------------------------
             }
 
 
-            StartCommandRecording();
+            ChangeState(
+                AssistantState.WaitingForWakeWord
+            );
 
+
+            // --------------------------------------------------------
+            // Start listening for wake word.
+            //
+            // There is NO command recording here.
+            // --------------------------------------------------------
+
+            StartWakeWordListening();
+
+
+            // --------------------------------------------------------
+            // Optional conversation timeout.
+            //
+            // This does NOT start the microphone.
+            //
+            // It only determines whether the assistant remains
+            // in conversation mode.
+            // --------------------------------------------------------
 
             StartConversationTimeout();
+
+
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] " +
+                "AI completely finished. " +
+                "Ready for next wake word."
+            );
         }
 
 
@@ -789,8 +1289,21 @@ namespace Whisper.Samples
             StopConversationTimeout();
 
 
-            if (!_conversationMode)
+            if (
+                conversationTimeout <= 0f
+            )
+            {
                 return;
+            }
+
+
+            if (
+                _state !=
+                AssistantState.WaitingForWakeWord
+            )
+            {
+                return;
+            }
 
 
             _conversationTimeoutCoroutine =
@@ -799,6 +1312,10 @@ namespace Whisper.Samples
                 );
         }
 
+
+        // ============================================================
+        // STOP CONVERSATION TIMEOUT
+        // ============================================================
 
         private void StopConversationTimeout()
         {
@@ -818,109 +1335,71 @@ namespace Whisper.Samples
         }
 
 
+        // ============================================================
+        // CONVERSATION TIMEOUT ROUTINE
+        // ============================================================
+
         private IEnumerator ConversationTimeoutRoutine()
         {
-            // --------------------------------------------------------
-            // Wait while recording / processing.
-            // --------------------------------------------------------
-
-            while (
-                _processingSpeech ||
-                _startingRecording
-            )
-            {
-                yield return null;
-            }
-
-
-            // --------------------------------------------------------
-            // Wait for another command.
-            // --------------------------------------------------------
-
             float timer =
                 0f;
 
 
             while (
-                timer <
-                conversationTimeout
+                !_destroying &&
+                _state ==
+                    AssistantState.WaitingForWakeWord
             )
             {
-                if (!_conversationMode)
-                    yield break;
+                timer +=
+                    Time.deltaTime;
 
 
                 if (
-                    _processingSpeech ||
-                    _startingRecording
+                    timer >=
+                    conversationTimeout
                 )
                 {
-                    yield break;
+                    break;
                 }
-
-
-                timer +=
-                    Time.deltaTime;
 
 
                 yield return null;
             }
 
 
-            // --------------------------------------------------------
-            // Exit conversation.
-            // --------------------------------------------------------
+            _conversationTimeoutCoroutine =
+                null;
+
+
+            if (_destroying)
+                yield break;
+
 
             if (
-                !_processingSpeech &&
-                !_startingRecording &&
-                _conversationMode
+                _state !=
+                AssistantState.WaitingForWakeWord
             )
             {
-                UnityEngine.Debug.Log(
-                    "[MicrophoneDemo] Conversation timeout."
-                );
-
-
-                ExitConversationMode();
-            }
-        }
-
-
-        // ============================================================
-        // EXIT CONVERSATION
-        // ============================================================
-
-        private void ExitConversationMode()
-        {
-            StopConversationTimeout();
-
-            StopRecordingTimeout();
-
-
-            // --------------------------------------------------------
-            // If microphone is still recording, stop it.
-            // --------------------------------------------------------
-
-            if (
-                microphoneRecord != null &&
-                microphoneRecord.IsRecording
-            )
-            {
-                microphoneRecord.StopRecord();
+                yield break;
             }
 
 
-            _conversationMode =
-                false;
+            UnityEngine.Debug.Log(
+                "[MicrophoneDemo] " +
+                "Conversation timeout."
+            );
 
 
-            _processingSpeech =
-                false;
+            // --------------------------------------------------------
+            // We remain safe.
+            //
+            // The next wake word can start a new command.
+            // --------------------------------------------------------
 
-
-            _startingRecording =
-                false;
+            ChangeState(
+                AssistantState.WaitingForWakeWord
+            );
 
 
             SetWakeWordStatus(
@@ -933,18 +1412,6 @@ namespace Whisper.Samples
                 buttonText.text =
                     "Say \"alexa\"";
             }
-
-
-            if (openWakeWordManager != null)
-            {
-                openWakeWordManager.StartListening();
-            }
-
-
-            UnityEngine.Debug.Log(
-                "[MicrophoneDemo] Conversation ended. " +
-                "Waiting for wake word."
-            );
         }
 
 
@@ -953,7 +1420,8 @@ namespace Whisper.Samples
         // ============================================================
 
         private void OnVadChanged(
-            bool value)
+            bool value
+        )
         {
             if (microphoneRecord != null)
             {
@@ -968,7 +1436,8 @@ namespace Whisper.Samples
         // ============================================================
 
         private void OnLanguageChanged(
-            int index)
+            int index
+        )
         {
             if (whisper == null)
                 return;
@@ -1000,7 +1469,8 @@ namespace Whisper.Samples
         // ============================================================
 
         private void OnTranslateChanged(
-            bool translate)
+            bool translate
+        )
         {
             if (whisper != null)
             {
@@ -1015,8 +1485,22 @@ namespace Whisper.Samples
         // ============================================================
 
         private void OnProgressHandler(
-            int progress)
+            int progress
+        )
         {
+            // --------------------------------------------------------
+            // Only show Whisper progress while transcribing.
+            // --------------------------------------------------------
+
+            if (
+                _state !=
+                AssistantState.Transcribing
+            )
+            {
+                return;
+            }
+
+
             if (timeText != null)
             {
                 timeText.text =
@@ -1030,7 +1514,8 @@ namespace Whisper.Samples
         // ============================================================
 
         private void OnNewSegment(
-            WhisperSegment segment)
+            WhisperSegment segment
+        )
         {
             if (!streamSegments)
                 return;
@@ -1038,6 +1523,20 @@ namespace Whisper.Samples
 
             if (outputText == null)
                 return;
+
+
+            // --------------------------------------------------------
+            // Only update streaming transcript while Whisper is
+            // actually transcribing.
+            // --------------------------------------------------------
+
+            if (
+                _state !=
+                AssistantState.Transcribing
+            )
+            {
+                return;
+            }
 
 
             _buffer +=
@@ -1059,7 +1558,8 @@ namespace Whisper.Samples
         // ============================================================
 
         private void SetWakeWordStatus(
-            string status)
+            string status
+        )
         {
             if (wakeWordStatusText != null)
             {
@@ -1081,10 +1581,22 @@ namespace Whisper.Samples
 
         private void OnDestroy()
         {
-            StopConversationTimeout();
+            _destroying =
+                true;
+
+
+            // --------------------------------------------------------
+            // Stop coroutines FIRST.
+            // --------------------------------------------------------
 
             StopRecordingTimeout();
 
+            StopConversationTimeout();
+
+
+            // --------------------------------------------------------
+            // Stop microphone.
+            // --------------------------------------------------------
 
             if (
                 microphoneRecord != null &&
@@ -1094,6 +1606,10 @@ namespace Whisper.Samples
                 microphoneRecord.StopRecord();
             }
 
+
+            // --------------------------------------------------------
+            // Whisper events
+            // --------------------------------------------------------
 
             if (whisper != null)
             {
@@ -1106,6 +1622,10 @@ namespace Whisper.Samples
             }
 
 
+            // --------------------------------------------------------
+            // Microphone event
+            // --------------------------------------------------------
+
             if (microphoneRecord != null)
             {
                 microphoneRecord.OnRecordStop -=
@@ -1113,12 +1633,20 @@ namespace Whisper.Samples
             }
 
 
+            // --------------------------------------------------------
+            // Wake word event
+            // --------------------------------------------------------
+
             if (openWakeWordManager != null)
             {
                 openWakeWordManager.WakeWordDetected -=
                     OnWakeWordDetected;
             }
 
+
+            // --------------------------------------------------------
+            // UI events
+            // --------------------------------------------------------
 
             if (languageDropdown != null)
             {
@@ -1145,4 +1673,3 @@ namespace Whisper.Samples
         }
     }
 }
-
