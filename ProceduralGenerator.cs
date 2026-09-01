@@ -1,600 +1,2210 @@
 ﻿using UnityEngine;
+using System.Collections.Generic;
 
 // ============================================================
 // TERRAIN GENERATOR
 // ============================================================
 //
-// Converts TerrainSettings into a Unity Terrain.
+// GENERATES:
 //
-// WORKFLOW
-// --------
-// 1. Existing Plane is the initial ground.
-// 2. AI requests terrain generation.
-// 3. Terrain is generated at the Plane's location.
-// 4. Terrain uses the Plane's X/Z size.
-// 5. TerrainCollider is explicitly configured.
-// 6. Existing Plane is automatically hidden.
-// 7. Generated Terrain becomes the new ground.
-// 8. User can later create Soil.
-// 9. User can later plant Crops.
+//      🏔️ REALISTIC OVERLAPPING MOUNTAIN RANGES
+//      🌊 RIVERS
+//      🏞️ LAKES
 //
-// Terrain generation NEVER creates soil.
+// IMPORTANT
+// ------------------------------------------------------------
+// Mountains can overlap each other.
 //
-// XR ray configuration is NOT handled here.
+// Rivers and lakes are protected from mountain areas.
+//
+// PUBLIC METHODS FOR DEMOCHAT:
+// ------------------------------------------------------------
+//
+//      GenerateTerrain()
+//      CreateRandomMountains()
+//      CreateMountainRange()
+//      CreateRandomLake()
+//      CreateRandomRiver()
+//      ResetTerrain()
+//
+// KEYBOARD:
+// ------------------------------------------------------------
+//
+//      G = Generate Mountains + Rivers + Lakes
+//      M = Generate Mountain Range
+//      L = Generate Lake
+//      R = Generate River
+//      C = Reset
+//
+// PLAY MODE:
+// ------------------------------------------------------------
+//
+// Original terrain is saved when Play Mode starts.
+//
+// When Play Mode stops:
+//      Original terrain is restored.
 //
 // ============================================================
 
+
 public class TerrainGenerator : MonoBehaviour
 {
-    // =========================================================
-    // TERRAIN PARENT
-    // =========================================================
+    // ========================================================
+    // EXISTING TERRAIN
+    // ========================================================
 
-    [Header("Terrain Parent")]
+    [Header("EXISTING TERRAIN")]
 
-    [Tooltip(
-        "Optional parent for the generated Terrain. " +
-        "The Terrain's world position is calculated from the Plane."
-    )]
+    [Tooltip("Drag your existing Unity Terrain here.")]
     [SerializeField]
-    private Transform terrainParent;
+    private Terrain targetTerrain;
 
 
-    // =========================================================
-    // EXISTING PLANE
-    // =========================================================
+    // ========================================================
+    // AUTOMATIC GENERATION
+    // ========================================================
 
-    [Header("Existing Ground Plane")]
-
-    [Tooltip(
-        "The existing Plane that will be replaced by the " +
-        "AI-generated Terrain."
-    )]
-    [SerializeField]
-    private GameObject existingPlane;
-
-
-    [Tooltip(
-        "Automatically hide the existing Plane after " +
-        "Terrain generation."
-    )]
-    [SerializeField]
-    private bool hidePlaneWhenTerrainGenerated = true;
-
-
-    [Tooltip(
-        "Automatically use the Plane's world size for " +
-        "the generated Terrain."
-    )]
-    [SerializeField]
-    private bool matchPlaneSize = true;
-
-
-    [Tooltip(
-        "Automatically use the Plane's world position " +
-        "for the generated Terrain."
-    )]
-    [SerializeField]
-    private bool matchPlanePosition = true;
-
-
-    // =========================================================
-    // DEFAULT SETTINGS
-    // =========================================================
-
-    [Header("Default Settings")]
+    [Header("AUTOMATIC GENERATION")]
 
     [SerializeField]
-    private int defaultWidth = 200;
+    private bool generateAutomatically = true;
 
     [SerializeField]
-    private int defaultDepth = 200;
+    private int automaticMountainRangeCount = 2;
 
     [SerializeField]
-    private int defaultHeight = 30;
-
-
-    // =========================================================
-    // RESOLUTION
-    // =========================================================
-
-    [Header("Resolution")]
+    private int automaticLakes = 2;
 
     [SerializeField]
-    private int heightmapResolution = 513;
+    private bool automaticRiver = true;
 
 
-    // =========================================================
-    // GENERATED TERRAIN
-    // =========================================================
+    // ========================================================
+    // MOUNTAIN RANGE
+    // ========================================================
 
-    [Header("Generated Terrain")]
+    [Header("MOUNTAIN RANGE")]
+
+    [Tooltip("Number of peaks inside each mountain range.")]
+    [SerializeField]
+    private int peaksPerRange = 5;
+
+    [Tooltip("Minimum mountain peak height.")]
+    [SerializeField]
+    private float minimumMountainHeight = 12f;
+
+    [Tooltip("Maximum mountain peak height.")]
+    [SerializeField]
+    private float maximumMountainHeight = 25f;
+
+    [Tooltip("Minimum mountain radius.")]
+    [SerializeField]
+    private float minimumMountainRadius = 18f;
+
+    [Tooltip("Maximum mountain radius.")]
+    [SerializeField]
+    private float maximumMountainRadius = 35f;
+
+    [Tooltip("Distance between mountain peaks.")]
+    [SerializeField]
+    private float mountainPeakSpacing = 25f;
+
+    [Tooltip("How much mountains overlap.")]
+    [Range(0f, 1f)]
+    [SerializeField]
+    private float mountainOverlap = 0.45f;
+
+    [Tooltip("Sideways movement of mountain range.")]
+    [SerializeField]
+    private float mountainWander = 20f;
+
+    [Tooltip("Extra protected area around mountains.")]
+    [SerializeField]
+    private float mountainProtectionPadding = 8f;
+
+
+    // ========================================================
+    // MOUNTAIN SHAPE
+    // ========================================================
+
+    [Header("MOUNTAIN SHAPE")]
+
+    [Tooltip("Higher value creates sharper peaks.")]
+    [SerializeField]
+    private float mountainSharpness = 2.4f;
+
+    [Tooltip("Mountain surface noise scale.")]
+    [SerializeField]
+    private float mountainNoiseScale = 0.035f;
+
+    [Tooltip("Mountain surface noise strength.")]
+    [SerializeField]
+    private float mountainNoiseStrength = 0.25f;
+
+
+    // ========================================================
+    // LAKES
+    // ========================================================
+
+    [Header("LAKES")]
 
     [SerializeField]
-    private Terrain generatedTerrain;
+    private float minimumLakeRadius = 10f;
+
+    [SerializeField]
+    private float maximumLakeRadius = 22f;
+
+    [SerializeField]
+    private float minimumLakeDepth = 2f;
+
+    [SerializeField]
+    private float maximumLakeDepth = 5f;
+
+    [SerializeField]
+    private float lakeWaterThickness = 0.2f;
+
+    [SerializeField]
+    private float lakeWaterLevelOffset = 0.08f;
+
+    [Tooltip("Minimum distance between lakes.")]
+    [SerializeField]
+    private float lakeSpacing = 8f;
 
 
-    // =========================================================
-    // PUBLIC GETTER
-    // =========================================================
+    // ========================================================
+    // RIVER
+    // ========================================================
+
+    [Header("RIVER")]
+
+    [SerializeField]
+    private float minimumRiverWidth = 3f;
+
+    [SerializeField]
+    private float maximumRiverWidth = 7f;
+
+    [SerializeField]
+    private float minimumRiverDepth = 1.5f;
+
+    [SerializeField]
+    private float maximumRiverDepth = 3f;
+
+    [SerializeField]
+    private int riverSegments = 25;
+
+    [SerializeField]
+    private float riverSegmentLength = 10f;
+
+    [SerializeField]
+    private float riverWanderAmount = 7f;
+
+    [SerializeField]
+    private float riverWaterThickness = 0.15f;
+
+    [SerializeField]
+    private float riverWaterLevelOffset = 0.05f;
+
+
+    // ========================================================
+    // TERRAIN TEXTURES
+    // ========================================================
+
+    [Header("TERRAIN TEXTURES")]
+
+    [Tooltip("Grass texture.")]
+    [SerializeField]
+    private Texture2D grassTexture;
+
+    [Tooltip("Rock texture.")]
+    [SerializeField]
+    private Texture2D rockTexture;
+
+    [Tooltip("Snow texture.")]
+    [SerializeField]
+    private Texture2D snowTexture;
+
+    [SerializeField]
+    private bool automaticallyCreateTerrainLayers = true;
+
+    [SerializeField]
+    private bool automaticallyPaintTerrain = true;
+
+
+    // ========================================================
+    // TEXTURE SETTINGS
+    // ========================================================
+
+    [Header("TEXTURE SETTINGS")]
+
+    [SerializeField]
+    private float rockStartSlope = 25f;
+
+    [SerializeField]
+    private float rockFullSlope = 45f;
+
+    [Range(0f, 1f)]
+    [SerializeField]
+    private float snowStartHeight = 0.70f;
+
+    [Range(0f, 1f)]
+    [SerializeField]
+    private float snowFullHeight = 0.90f;
+
+    [SerializeField]
+    private Vector2 textureTileSize =
+        new Vector2(15f, 15f);
+
+    [SerializeField]
+    private Vector2 textureTileOffset =
+        Vector2.zero;
+
+    [SerializeField]
+    private bool configureURP = true;
+
+
+    // ========================================================
+    // WATER
+    // ========================================================
+
+    [Header("WATER")]
+
+    [Tooltip("Optional water material.")]
+    [SerializeField]
+    private Material waterMaterial;
+
+
+    // ========================================================
+    // INTERNAL WATER PARENT
+    // ========================================================
+
+    private GameObject generatedWaterParent;
+
+
+    // ========================================================
+    // ORIGINAL TERRAIN
+    // ========================================================
+
+    private float[,] originalHeights;
+
+    private bool originalHeightsSaved;
+
+
+    // ========================================================
+    // TERRAIN LAYERS
+    // ========================================================
+
+    private TerrainLayer grassLayer;
+
+    private TerrainLayer rockLayer;
+
+    private TerrainLayer snowLayer;
+
+
+    // ========================================================
+    // MOUNTAIN ZONE
+    // ========================================================
+
+    private class MountainZone
+    {
+        public Vector2 center;
+
+        public float radius;
+
+
+        public MountainZone(
+            Vector2 center,
+            float radius)
+        {
+            this.center = center;
+            this.radius = radius;
+        }
+    }
+
+
+    private List<MountainZone> mountainZones =
+        new List<MountainZone>();
+
+
+    // ========================================================
+    // WATER FEATURE
+    // ========================================================
+
+    private class WaterFeature
+    {
+        public Vector2 position;
+
+        public float radius;
+
+
+        public WaterFeature(
+            Vector2 position,
+            float radius)
+        {
+            this.position = position;
+            this.radius = radius;
+        }
+    }
+
+
+    private List<WaterFeature> waterFeatures =
+        new List<WaterFeature>();
+
+
+    // ========================================================
+    // PUBLIC ACCESS
+    // ========================================================
 
     public Terrain GetGeneratedTerrain()
     {
-        return generatedTerrain;
+        return targetTerrain;
     }
 
 
-    // =========================================================
-    // CHECK TERRAIN
-    // =========================================================
-
-    public bool HasGeneratedTerrain()
+    public Terrain GetTargetTerrain()
     {
-        return generatedTerrain != null;
+        return targetTerrain;
     }
 
 
-    // =========================================================
-    // PUBLIC API
-    // =========================================================
+    // ========================================================
+    // START
+    // ========================================================
 
-    public void GenerateTerrain(
-        TerrainSettings settings
-    )
+    private void Start()
     {
-        // -----------------------------------------------------
-        // VALIDATE
-        // -----------------------------------------------------
-
-        if (settings == null)
+        if (!HasValidTerrain())
         {
-            Debug.LogError(
-                "TerrainGenerator: " +
-                "Terrain settings are null."
-            );
-
             return;
         }
 
 
-        // -----------------------------------------------------
-        // SAFETY LIMITS
-        // -----------------------------------------------------
+        SaveOriginalTerrain();
 
-        settings.width =
-            Mathf.Clamp(
-                settings.width,
-                20,
-                1000
-            );
+        CreateWaterParent();
 
-        settings.depth =
-            Mathf.Clamp(
-                settings.depth,
-                20,
-                1000
-            );
+        FindAndCreateTerrainLayers();
 
-        settings.height =
-            Mathf.Clamp(
-                settings.height,
-                1,
-                500
-            );
-
-        settings.roughness =
-            Mathf.Clamp01(
-                settings.roughness
-            );
-
-        settings.detailScale =
-            Mathf.Clamp(
-                settings.detailScale,
-                0.001f,
-                0.2f
-            );
-
-        settings.octaves =
-            Mathf.Clamp(
-                settings.octaves,
-                1,
-                8
-            );
+        ConfigureTerrainForURP();
 
 
-        // -----------------------------------------------------
-        // REMOVE OLD GENERATED TERRAIN
-        // -----------------------------------------------------
-
-        ClearTerrain();
-
-
-        // =====================================================
-        // GET EXISTING PLANE BOUNDS
-        // =====================================================
-
-        Bounds planeBounds =
-            new Bounds();
-
-        bool hasPlaneBounds = false;
-
-
-        if (existingPlane != null)
+        if (generateAutomatically)
         {
-            Renderer planeRenderer =
-                existingPlane.GetComponent<Renderer>();
-
-
-            if (planeRenderer != null)
-            {
-                planeBounds =
-                    planeRenderer.bounds;
-
-                hasPlaneBounds = true;
-
-
-                Debug.Log(
-                    "[TerrainGenerator] " +
-                    "Plane detected."
-                );
-
-
-                Debug.Log(
-                    "[TerrainGenerator] " +
-                    "Plane bounds: " +
-                    planeBounds
-                );
-            }
-            else
-            {
-                Debug.LogWarning(
-                    "[TerrainGenerator] " +
-                    "Existing Plane does not have a Renderer. " +
-                    "Using TerrainSettings size instead."
-                );
-            }
+            GenerateTerrain();
         }
         else
         {
-            Debug.LogWarning(
-                "[TerrainGenerator] " +
-                "Existing Plane is not assigned. " +
-                "Using TerrainSettings size instead."
-            );
+            ApplyTerrainTextures();
         }
+    }
 
 
-        // =====================================================
-        // DETERMINE TERRAIN SIZE
-        // =====================================================
+    // ========================================================
+    // DESTROY
+    // ========================================================
 
-        float terrainWidth =
-            settings.width;
-
-
-        float terrainDepth =
-            settings.depth;
+    private void OnDestroy()
+    {
+        RestoreOriginalTerrain();
+    }
 
 
-        if (
-            matchPlaneSize &&
-            hasPlaneBounds
-        )
+    // ========================================================
+    // GENERATE EVERYTHING
+    // ========================================================
+
+    public void GenerateTerrain()
+    {
+        if (!HasValidTerrain())
         {
-            terrainWidth =
-                Mathf.Max(
-                    planeBounds.size.x,
-                    20f
-                );
-
-
-            terrainDepth =
-                Mathf.Max(
-                    planeBounds.size.z,
-                    20f
-                );
-
-
-            Debug.Log(
-                "[TerrainGenerator] " +
-                "Terrain size matched to Plane: " +
-                terrainWidth +
-                " x " +
-                terrainDepth
-            );
+            return;
         }
 
 
-        // =====================================================
-        // CREATE TERRAIN DATA
-        // =====================================================
-
-        TerrainData terrainData =
-            new TerrainData();
-
-
-        terrainData.heightmapResolution =
-            heightmapResolution;
-
-
-        terrainData.size =
-            new Vector3(
-                terrainWidth,
-                settings.height,
-                terrainDepth
-            );
-
-
-        // -----------------------------------------------------
-        // HEIGHTMAP
-        // -----------------------------------------------------
-
-        float[,] heights =
-            GenerateHeightmap(
-                settings
-            );
-
-
-        terrainData.SetHeights(
-            0,
-            0,
-            heights
+        Debug.Log(
+            "============================================\n" +
+            "TERRAIN GENERATION STARTED\n" +
+            "============================================"
         );
 
 
-        // =====================================================
-        // CREATE TERRAIN GAMEOBJECT
-        // =====================================================
+        FindAndCreateTerrainLayers();
 
-        GameObject terrainObject =
-            Terrain.CreateTerrainGameObject(
-                terrainData
+        ConfigureTerrainForURP();
+
+        mountainZones.Clear();
+
+        waterFeatures.Clear();
+
+        ClearGeneratedWater();
+
+
+        // ----------------------------------------------------
+        // MOUNTAINS
+        // ----------------------------------------------------
+
+        int mountainRanges =
+            Mathf.Clamp(
+                automaticMountainRangeCount,
+                0,
+                10
             );
 
 
-        terrainObject.name =
-            "AI_Generated_Terrain";
+        CreateRandomMountains(
+            mountainRanges
+        );
 
 
-        // =====================================================
-        // POSITION TERRAIN
-        // =====================================================
+        // ----------------------------------------------------
+        // LAKES
+        // ----------------------------------------------------
 
-        if (
-            matchPlanePosition &&
-            hasPlaneBounds
+        int lakeCount =
+            Mathf.Clamp(
+                automaticLakes,
+                0,
+                20
+            );
+
+
+        for (
+            int i = 0;
+            i < lakeCount;
+            i++)
+        {
+            CreateRandomLake();
+        }
+
+
+        // ----------------------------------------------------
+        // RIVER
+        // ----------------------------------------------------
+
+        if (automaticRiver)
+        {
+            CreateRandomRiver();
+        }
+
+
+        // ----------------------------------------------------
+        // TEXTURES
+        // ----------------------------------------------------
+
+        ApplyTerrainTextures();
+
+        RefreshTerrainCollider();
+
+
+        Debug.Log(
+            "============================================\n" +
+            "TERRAIN GENERATION COMPLETE\n" +
+            "============================================\n" +
+            $"Mountain ranges: {mountainRanges}\n" +
+            $"Lakes: {lakeCount}\n" +
+            $"River: {automaticRiver}\n" +
+            "============================================"
+        );
+    }
+
+
+    // ========================================================
+    // CREATE RANDOM MOUNTAINS
+    // ========================================================
+    //
+    // IMPORTANT:
+    //
+    // This method fixes the DemoChat error:
+    //
+    //     TerrainGenerator does not contain
+    //     CreateRandomMountains
+    //
+    // DemoChat can safely call:
+    //
+    //     terrainGenerator.CreateRandomMountains();
+    //
+    // ========================================================
+
+    public void CreateRandomMountains()
+    {
+        CreateRandomMountains(
+            automaticMountainRangeCount
+        );
+    }
+
+
+    // ========================================================
+    // CREATE RANDOM MOUNTAINS
+    // ========================================================
+
+    public void CreateRandomMountains(
+        int numberOfRanges
+    )
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        numberOfRanges =
+            Mathf.Clamp(
+                numberOfRanges,
+                1,
+                10
+            );
+
+
+        for (
+            int i = 0;
+            i < numberOfRanges;
+            i++
         )
         {
-            // Terrain transform.position represents
-            // the minimum corner of the Terrain.
-            //
-            // Therefore use the Plane bounds minimum
-            // for X and Z.
-            //
-            // Y is the base of the Terrain.
+            CreateMountainRange();
+        }
 
-            terrainObject.transform.position =
-                new Vector3(
-                    planeBounds.min.x,
-                    planeBounds.min.y,
-                    planeBounds.min.z
+
+        ApplyTerrainTextures();
+
+        RefreshTerrainCollider();
+
+
+        Debug.Log(
+            $"Created {numberOfRanges} " +
+            "random mountain range(s)."
+        );
+    }
+
+
+    // ========================================================
+    // CREATE MOUNTAIN RANGE
+    // ========================================================
+
+    public void CreateMountainRange()
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        TerrainData terrainData =
+            targetTerrain.terrainData;
+
+
+        int peakCount =
+            Mathf.Clamp(
+                peaksPerRange,
+                2,
+                15
+            );
+
+
+        // ----------------------------------------------------
+        // START POSITION
+        // ----------------------------------------------------
+
+        float firstRadius =
+            Random.Range(
+                minimumMountainRadius,
+                maximumMountainRadius
+            );
+
+
+        Vector2 start =
+            GetRandomTerrainPosition(
+                firstRadius +
+                mountainProtectionPadding
+            );
+
+
+        // ----------------------------------------------------
+        // RANGE DIRECTION
+        // ----------------------------------------------------
+
+        Vector2 direction =
+            Random.value > 0.5f
+            ? Vector2.right
+            : Vector2.up;
+
+
+        direction =
+            RotateVector(
+                direction,
+                Random.Range(
+                    -35f,
+                    35f
+                )
+            );
+
+
+        Vector2 current =
+            start;
+
+
+        // ----------------------------------------------------
+        // CREATE PEAKS
+        // ----------------------------------------------------
+
+        for (
+            int i = 0;
+            i < peakCount;
+            i++
+        )
+        {
+            float radius =
+                Random.Range(
+                    minimumMountainRadius,
+                    maximumMountainRadius
                 );
 
 
-            Debug.Log(
-                "[TerrainGenerator] " +
-                "Terrain positioned at Plane bounds minimum: " +
-                terrainObject.transform.position
+            float height =
+                Random.Range(
+                    minimumMountainHeight,
+                    maximumMountainHeight
+                );
+
+
+            // ------------------------------------------------
+            // MOVE TO NEXT PEAK
+            // ------------------------------------------------
+
+            if (i > 0)
+            {
+                float sideways =
+                    Random.Range(
+                        -mountainWander,
+                        mountainWander
+                    );
+
+
+                Vector2 perpendicular =
+                    new Vector2(
+                        -direction.y,
+                        direction.x
+                    );
+
+
+                float forwardDistance =
+                    mountainPeakSpacing *
+                    (
+                        1f -
+                        mountainOverlap
+                    );
+
+
+                current +=
+                    direction.normalized *
+                    forwardDistance;
+
+
+                current +=
+                    perpendicular *
+                    sideways;
+            }
+
+
+            // ------------------------------------------------
+            // KEEP INSIDE TERRAIN
+            // ------------------------------------------------
+
+            float edge =
+                radius +
+                mountainProtectionPadding;
+
+
+            current.x =
+                Mathf.Clamp(
+                    current.x,
+                    edge,
+                    terrainData.size.x - edge
+                );
+
+
+            current.y =
+                Mathf.Clamp(
+                    current.y,
+                    edge,
+                    terrainData.size.z - edge
+                );
+
+
+            // ------------------------------------------------
+            // CREATE MOUNTAIN
+            // ------------------------------------------------
+
+            ModifyTerrainArea(
+                current,
+                radius,
+                height,
+                false,
+                true
+            );
+
+
+            // ------------------------------------------------
+            // REGISTER PROTECTION ZONE
+            // ------------------------------------------------
+
+            mountainZones.Add(
+                new MountainZone(
+                    current,
+                    radius +
+                    mountainProtectionPadding
+                )
             );
         }
-        else if (terrainParent != null)
+
+
+        Debug.Log(
+            $"Mountain range created. " +
+            $"Peaks = {peakCount}"
+        );
+    }
+
+
+    // ========================================================
+    // CREATE RANDOM LAKE
+    // ========================================================
+
+    public void CreateRandomLake()
+    {
+        if (!HasValidTerrain())
         {
-            terrainObject.transform.SetParent(
-                terrainParent,
-                false
-            );
-
-
-            terrainObject.transform.localPosition =
-                Vector3.zero;
+            return;
         }
 
 
-        // =====================================================
-        // GET TERRAIN
-        // =====================================================
-
-        generatedTerrain =
-            terrainObject.GetComponent<Terrain>();
+        CreateWaterParent();
 
 
-        if (generatedTerrain == null)
-        {
-            Debug.LogError(
-                "[TerrainGenerator] " +
-                "Could not get Terrain component."
+        float radius =
+            Random.Range(
+                minimumLakeRadius,
+                maximumLakeRadius
             );
 
-            Destroy(
-                terrainObject
+
+        float depth =
+            Random.Range(
+                minimumLakeDepth,
+                maximumLakeDepth
+            );
+
+
+        Vector2 position;
+
+
+        if (!TryGetWaterPosition(
+                radius,
+                out position))
+        {
+            Debug.LogWarning(
+                "Could not place lake " +
+                "outside mountains."
             );
 
             return;
         }
 
 
-        // =====================================================
-        // TERRAIN COLLIDER
-        // =====================================================
-        //
-        // Terrain.CreateTerrainGameObject() normally creates
-        // a TerrainCollider automatically.
-        //
-        // We explicitly verify the collider because the
-        // XR Character Controller must be able to collide
-        // with the generated Terrain.
-        //
-        // =====================================================
+        // ----------------------------------------------------
+        // LOWER TERRAIN
+        // ----------------------------------------------------
 
-        TerrainCollider terrainCollider =
-            terrainObject.GetComponent<TerrainCollider>();
+        ModifyTerrainArea(
+            position,
+            radius,
+            depth,
+            true,
+            false
+        );
 
 
-        if (terrainCollider == null)
-        {
-            Debug.LogWarning(
-                "[TerrainGenerator] " +
-                "TerrainCollider was missing. " +
-                "Adding one now."
+        // ----------------------------------------------------
+        // WORLD POSITION
+        // ----------------------------------------------------
+
+        Vector3 worldPosition =
+            TerrainLocalToWorld(
+                position.x,
+                position.y
             );
 
 
-            terrainCollider =
-                terrainObject.AddComponent<TerrainCollider>();
-        }
-
-
-        // -----------------------------------------------------
-        // CONNECT COLLIDER TO TERRAIN DATA
-        // -----------------------------------------------------
-
-        terrainCollider.terrainData =
-            generatedTerrain.terrainData;
-
-
-        // -----------------------------------------------------
-        // ENABLE COLLIDER
-        // -----------------------------------------------------
-
-        terrainCollider.enabled = true;
-
-
-        // -----------------------------------------------------
-        // DEBUG COLLIDER
-        // -----------------------------------------------------
-
-        Debug.Log(
-            "[TerrainGenerator] " +
-            "TerrainCollider configured."
-        );
-
-
-        Debug.Log(
-            "[TerrainGenerator] " +
-            "Collider enabled = " +
-            terrainCollider.enabled
-        );
-
-
-        Debug.Log(
-            "[TerrainGenerator] " +
-            "Collider TerrainData = " +
-            terrainCollider.terrainData
-        );
-
-
-        Debug.Log(
-            "[TerrainGenerator] " +
-            "Terrain position = " +
-            terrainObject.transform.position
-        );
-
-
-        Debug.Log(
-            "[TerrainGenerator] " +
-            "Terrain size = " +
-            generatedTerrain.terrainData.size
-        );
-
-
-        // =====================================================
-        // TERRAIN SETTINGS
-        // =====================================================
-
-        generatedTerrain.heightmapPixelError =
-            5;
-
-
-        generatedTerrain.basemapDistance =
-            1000;
-
-
-        // =====================================================
-        // HIDE EXISTING PLANE
-        // =====================================================
-
-        if (
-            hidePlaneWhenTerrainGenerated &&
-            existingPlane != null
-        )
-        {
-            existingPlane.SetActive(false);
-
-
-            Debug.Log(
-                "[TerrainGenerator] " +
-                "Existing Plane hidden."
+        float terrainHeight =
+            targetTerrain.SampleHeight(
+                worldPosition
             );
+
+
+        float waterHeight =
+            terrainHeight +
+            lakeWaterLevelOffset;
+
+
+        // ----------------------------------------------------
+        // CREATE LAKE
+        // ----------------------------------------------------
+
+        GameObject lake =
+            GameObject.CreatePrimitive(
+                PrimitiveType.Cylinder
+            );
+
+
+        lake.name =
+            "Lake_" +
+            Random.Range(
+                1000,
+                9999
+            );
+
+
+        lake.transform.SetParent(
+            generatedWaterParent.transform
+        );
+
+
+        lake.transform.position =
+            new Vector3(
+                worldPosition.x,
+                waterHeight,
+                worldPosition.z
+            );
+
+
+        float diameter =
+            radius * 2f;
+
+
+        lake.transform.localScale =
+            new Vector3(
+                diameter,
+                lakeWaterThickness,
+                diameter
+            );
+
+
+        Collider collider =
+            lake.GetComponent<Collider>();
+
+
+        if (collider != null)
+        {
+            Destroy(collider);
         }
 
 
-        // =====================================================
-        // DEBUG
-        // =====================================================
+        ApplyWaterMaterial(lake);
 
-        Debug.Log(
-            $"AI Terrain generated: " +
-            $"{settings.terrainType}, " +
-            $"{terrainWidth} x {terrainDepth}, " +
-            $"height {settings.height}"
+
+        waterFeatures.Add(
+            new WaterFeature(
+                position,
+                radius +
+                lakeSpacing
+            )
         );
 
 
         Debug.Log(
-            "[TerrainGenerator] " +
-            "Terrain generation complete. " +
-            "Terrain replaces the Plane. " +
-            "TerrainCollider is enabled. " +
-            "No soil was created."
+            $"Lake created. " +
+            $"Radius = {radius:F1}"
         );
     }
 
 
-    // =========================================================
-    // HEIGHTMAP
-    // =========================================================
+    // ========================================================
+    // CREATE RANDOM RIVER
+    // ========================================================
 
-    private float[,] GenerateHeightmap(
-        TerrainSettings settings
+    public void CreateRandomRiver()
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        CreateWaterParent();
+
+
+        int segmentCount =
+            Mathf.Clamp(
+                riverSegments,
+                4,
+                60
+            );
+
+
+        float width =
+            Random.Range(
+                minimumRiverWidth,
+                maximumRiverWidth
+            );
+
+
+        float depth =
+            Random.Range(
+                minimumRiverDepth,
+                maximumRiverDepth
+            );
+
+
+        // ----------------------------------------------------
+        // FIND SAFE RIVER PATH
+        // ----------------------------------------------------
+
+        for (
+            int attempt = 0;
+            attempt < 50;
+            attempt++
+        )
+        {
+            Vector2 start =
+                GetRandomTerrainPosition(
+                    width + 5f
+                );
+
+
+            List<Vector2> points =
+                BuildRiverPath(
+                    start,
+                    width,
+                    segmentCount
+                );
+
+
+            if (
+                points == null ||
+                points.Count < 2
+            )
+            {
+                continue;
+            }
+
+
+            if (
+                RiverTouchesMountain(
+                    points,
+                    width
+                )
+            )
+            {
+                continue;
+            }
+
+
+            // ------------------------------------------------
+            // CUT RIVER INTO TERRAIN
+            // ------------------------------------------------
+
+            for (
+                int i = 0;
+                i < points.Count;
+                i++
+            )
+            {
+                ModifyTerrainArea(
+                    points[i],
+                    width,
+                    depth,
+                    true,
+                    false
+                );
+            }
+
+
+            // ------------------------------------------------
+            // CREATE WATER
+            // ------------------------------------------------
+
+            for (
+                int i = 0;
+                i < points.Count - 1;
+                i++
+            )
+            {
+                CreateRiverWaterSegment(
+                    points[i],
+                    points[i + 1],
+                    width
+                );
+            }
+
+
+            foreach (
+                Vector2 point
+                in points
+            )
+            {
+                waterFeatures.Add(
+                    new WaterFeature(
+                        point,
+                        width
+                    )
+                );
+            }
+
+
+            Debug.Log(
+                $"River created. " +
+                $"Segments = {points.Count}, " +
+                $"Width = {width:F1}"
+            );
+
+
+            return;
+        }
+
+
+        Debug.LogWarning(
+            "Could not find river path " +
+            "outside mountains."
+        );
+    }
+
+
+    // ========================================================
+    // BUILD RIVER PATH
+    // ========================================================
+
+    private List<Vector2> BuildRiverPath(
+        Vector2 start,
+        float width,
+        int segmentCount
     )
     {
+        TerrainData terrainData =
+            targetTerrain.terrainData;
+
+
+        List<Vector2> points =
+            new List<Vector2>();
+
+
+        Vector2 current =
+            start;
+
+
+        Vector2 direction =
+            Random.value > 0.5f
+            ? Vector2.right
+            : Vector2.up;
+
+
+        direction =
+            RotateVector(
+                direction,
+                Random.Range(
+                    -25f,
+                    25f
+                )
+            );
+
+
+        points.Add(current);
+
+
+        for (
+            int i = 1;
+            i < segmentCount;
+            i++
+        )
+        {
+            float angle =
+                Random.Range(
+                    -20f,
+                    20f
+                );
+
+
+            direction =
+                RotateVector(
+                    direction,
+                    angle
+                );
+
+
+            float wander =
+                Random.Range(
+                    -riverWanderAmount,
+                    riverWanderAmount
+                );
+
+
+            Vector2 sideways =
+                new Vector2(
+                    -direction.y,
+                    direction.x
+                );
+
+
+            Vector2 next =
+                current +
+                direction.normalized *
+                riverSegmentLength;
+
+
+            next +=
+                sideways.normalized *
+                wander;
+
+
+            float edge =
+                width + 2f;
+
+
+            next.x =
+                Mathf.Clamp(
+                    next.x,
+                    edge,
+                    terrainData.size.x - edge
+                );
+
+
+            next.y =
+                Mathf.Clamp(
+                    next.y,
+                    edge,
+                    terrainData.size.z - edge
+                );
+
+
+            points.Add(next);
+
+
+            current = next;
+        }
+
+
+        return points;
+    }
+
+
+    // ========================================================
+    // RIVER VS MOUNTAIN
+    // ========================================================
+
+    private bool RiverTouchesMountain(
+        List<Vector2> points,
+        float riverWidth
+    )
+    {
+        foreach (
+            Vector2 point
+            in points
+        )
+        {
+            foreach (
+                MountainZone mountain
+                in mountainZones
+            )
+            {
+                float distance =
+                    Vector2.Distance(
+                        point,
+                        mountain.center
+                    );
+
+
+                if (
+                    distance <
+                    mountain.radius +
+                    riverWidth
+                )
+                {
+                    return true;
+                }
+            }
+        }
+
+
+        return false;
+    }
+
+
+    // ========================================================
+    // WATER POSITION
+    // ========================================================
+
+    private bool TryGetWaterPosition(
+        float radius,
+        out Vector2 position
+    )
+    {
+        for (
+            int attempt = 0;
+            attempt < 100;
+            attempt++
+        )
+        {
+            Vector2 candidate =
+                GetRandomTerrainPosition(
+                    radius +
+                    mountainProtectionPadding
+                );
+
+
+            // ------------------------------------------------
+            // NEVER PLACE WATER IN MOUNTAINS
+            // ------------------------------------------------
+
+            if (
+                IsInsideMountain(
+                    candidate,
+                    radius
+                )
+            )
+            {
+                continue;
+            }
+
+
+            // ------------------------------------------------
+            // KEEP WATER FEATURES APART
+            // ------------------------------------------------
+
+            if (
+                IsTooCloseToWater(
+                    candidate,
+                    radius
+                )
+            )
+            {
+                continue;
+            }
+
+
+            position =
+                candidate;
+
+
+            return true;
+        }
+
+
+        position =
+            Vector2.zero;
+
+
+        return false;
+    }
+
+
+    // ========================================================
+    // IS INSIDE MOUNTAIN
+    // ========================================================
+
+    private bool IsInsideMountain(
+        Vector2 position,
+        float radius
+    )
+    {
+        foreach (
+            MountainZone mountain
+            in mountainZones
+        )
+        {
+            float distance =
+                Vector2.Distance(
+                    position,
+                    mountain.center
+                );
+
+
+            if (
+                distance <
+                mountain.radius +
+                radius
+            )
+            {
+                return true;
+            }
+        }
+
+
+        return false;
+    }
+
+
+    // ========================================================
+    // WATER SPACING
+    // ========================================================
+
+    private bool IsTooCloseToWater(
+        Vector2 position,
+        float radius
+    )
+    {
+        foreach (
+            WaterFeature feature
+            in waterFeatures
+        )
+        {
+            float distance =
+                Vector2.Distance(
+                    position,
+                    feature.position
+                );
+
+
+            if (
+                distance <
+                radius +
+                feature.radius
+            )
+            {
+                return true;
+            }
+        }
+
+
+        return false;
+    }
+
+
+    // ========================================================
+    // MODIFY TERRAIN
+    // ========================================================
+
+    private void ModifyTerrainArea(
+        Vector2 position,
+        float radius,
+        float amount,
+        bool isLowering,
+        bool isMountain
+    )
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        TerrainData terrainData =
+            targetTerrain.terrainData;
+
+
         int resolution =
-            heightmapResolution;
+            terrainData.heightmapResolution;
+
+
+        int centerX =
+            Mathf.RoundToInt(
+                position.x /
+                terrainData.size.x *
+                (resolution - 1)
+            );
+
+
+        int centerZ =
+            Mathf.RoundToInt(
+                position.y /
+                terrainData.size.z *
+                (resolution - 1)
+            );
+
+
+        int radiusSamplesX =
+            Mathf.CeilToInt(
+                radius /
+                terrainData.size.x *
+                (resolution - 1)
+            );
+
+
+        int radiusSamplesZ =
+            Mathf.CeilToInt(
+                radius /
+                terrainData.size.z *
+                (resolution - 1)
+            );
+
+
+        radiusSamplesX =
+            Mathf.Max(
+                radiusSamplesX,
+                1
+            );
+
+
+        radiusSamplesZ =
+            Mathf.Max(
+                radiusSamplesZ,
+                1
+            );
+
+
+        int startX =
+            Mathf.Max(
+                0,
+                centerX -
+                radiusSamplesX
+            );
+
+
+        int endX =
+            Mathf.Min(
+                resolution - 1,
+                centerX +
+                radiusSamplesX
+            );
+
+
+        int startZ =
+            Mathf.Max(
+                0,
+                centerZ -
+                radiusSamplesZ
+            );
+
+
+        int endZ =
+            Mathf.Min(
+                resolution - 1,
+                centerZ +
+                radiusSamplesZ
+            );
+
+
+        int width =
+            endX -
+            startX +
+            1;
+
+
+        int height =
+            endZ -
+            startZ +
+            1;
 
 
         float[,] heights =
+            terrainData.GetHeights(
+                startX,
+                startZ,
+                width,
+                height
+            );
+
+
+        for (
+            int z = 0;
+            z < height;
+            z++
+        )
+        {
+            for (
+                int x = 0;
+                x < width;
+                x++
+            )
+            {
+                int absoluteX =
+                    startX + x;
+
+
+                int absoluteZ =
+                    startZ + z;
+
+
+                float normalizedX =
+                    (
+                        absoluteX -
+                        centerX
+                    ) /
+                    (float)
+                    radiusSamplesX;
+
+
+                float normalizedZ =
+                    (
+                        absoluteZ -
+                        centerZ
+                    ) /
+                    (float)
+                    radiusSamplesZ;
+
+
+                float distance =
+                    Mathf.Sqrt(
+                        normalizedX *
+                        normalizedX +
+                        normalizedZ *
+                        normalizedZ
+                    );
+
+
+                if (distance > 1f)
+                {
+                    continue;
+                }
+
+
+                // ------------------------------------------------
+                // SMOOTH FALLOFF
+                // ------------------------------------------------
+
+                float falloff =
+                    1f -
+                    Mathf.SmoothStep(
+                        0f,
+                        1f,
+                        distance
+                    );
+
+
+                float shape;
+
+
+                // ------------------------------------------------
+                // MOUNTAIN
+                // ------------------------------------------------
+
+                if (isMountain)
+                {
+                    shape =
+                        Mathf.Pow(
+                            falloff,
+                            mountainSharpness
+                        );
+
+
+                    // ------------------------------------------------
+                    // IRREGULAR SURFACE
+                    // ------------------------------------------------
+
+                    float noise =
+                        Mathf.PerlinNoise(
+                            absoluteX *
+                            mountainNoiseScale,
+
+                            absoluteZ *
+                            mountainNoiseScale
+                        );
+
+
+                    noise =
+                        Mathf.Lerp(
+                            1f -
+                            mountainNoiseStrength,
+
+                            1f +
+                            mountainNoiseStrength,
+
+                            noise
+                        );
+
+
+                    shape *= noise;
+                }
+
+
+                // ------------------------------------------------
+                // WATER
+                // ------------------------------------------------
+
+                else
+                {
+                    shape =
+                        Mathf.Pow(
+                            falloff,
+                            1.5f
+                        );
+                }
+
+
+                float normalizedAmount =
+                    amount /
+                    terrainData.size.y;
+
+
+                float modification =
+                    normalizedAmount *
+                    shape;
+
+
+                if (isLowering)
+                {
+                    modification =
+                        -Mathf.Abs(
+                            modification
+                        );
+                }
+
+
+                heights[z, x] +=
+                    modification;
+
+
+                heights[z, x] =
+                    Mathf.Clamp01(
+                        heights[z, x]
+                    );
+            }
+        }
+
+
+        terrainData.SetHeights(
+            startX,
+            startZ,
+            heights
+        );
+    }
+
+
+    // ========================================================
+    // RANDOM TERRAIN POSITION
+    // ========================================================
+
+    private Vector2 GetRandomTerrainPosition(
+        float margin
+    )
+    {
+        TerrainData terrainData =
+            targetTerrain.terrainData;
+
+
+        margin =
+            Mathf.Max(
+                margin,
+                1f
+            );
+
+
+        float minX =
+            margin;
+
+
+        float maxX =
+            terrainData.size.x -
+            margin;
+
+
+        float minZ =
+            margin;
+
+
+        float maxZ =
+            terrainData.size.z -
+            margin;
+
+
+        if (maxX <= minX)
+        {
+            minX = 0f;
+            maxX = terrainData.size.x;
+        }
+
+
+        if (maxZ <= minZ)
+        {
+            minZ = 0f;
+            maxZ = terrainData.size.z;
+        }
+
+
+        return new Vector2(
+            Random.Range(
+                minX,
+                maxX
+            ),
+
+            Random.Range(
+                minZ,
+                maxZ
+            )
+        );
+    }
+
+
+    // ========================================================
+    // TERRAIN LOCAL -> WORLD
+    // ========================================================
+
+    private Vector3 TerrainLocalToWorld(
+        float localX,
+        float localZ
+    )
+    {
+        Vector3 terrainPosition =
+            targetTerrain.transform.position;
+
+
+        Vector3 sample =
+            terrainPosition +
+            new Vector3(
+                localX,
+                0f,
+                localZ
+            );
+
+
+        float height =
+            targetTerrain.SampleHeight(
+                sample
+            );
+
+
+        return terrainPosition +
+               new Vector3(
+                   localX,
+                   height,
+                   localZ
+               );
+    }
+
+
+    // ========================================================
+    // CREATE RIVER WATER
+    // ========================================================
+
+    private void CreateRiverWaterSegment(
+        Vector2 start,
+        Vector2 end,
+        float width
+    )
+    {
+        Vector2 middle =
+            (start + end) *
+            0.5f;
+
+
+        Vector2 difference =
+            end - start;
+
+
+        float length =
+            difference.magnitude;
+
+
+        if (length <= 0.01f)
+        {
+            return;
+        }
+
+
+        Vector3 worldStart =
+            TerrainLocalToWorld(
+                start.x,
+                start.y
+            );
+
+
+        Vector3 worldEnd =
+            TerrainLocalToWorld(
+                end.x,
+                end.y
+            );
+
+
+        Vector3 worldMiddle =
+            TerrainLocalToWorld(
+                middle.x,
+                middle.y
+            );
+
+
+        float heightStart =
+            targetTerrain.SampleHeight(
+                worldStart
+            );
+
+
+        float heightEnd =
+            targetTerrain.SampleHeight(
+                worldEnd
+            );
+
+
+        float heightMiddle =
+            targetTerrain.SampleHeight(
+                worldMiddle
+            );
+
+
+        float waterHeight =
+            (
+                heightStart +
+                heightEnd +
+                heightMiddle
+            )
+            / 3f;
+
+
+        waterHeight +=
+            riverWaterLevelOffset;
+
+
+        GameObject river =
+            GameObject.CreatePrimitive(
+                PrimitiveType.Cube
+            );
+
+
+        river.name =
+            "RiverWater";
+
+
+        river.transform.SetParent(
+            generatedWaterParent.transform
+        );
+
+
+        river.transform.position =
+            new Vector3(
+                worldMiddle.x,
+                waterHeight,
+                worldMiddle.z
+            );
+
+
+        float angle =
+            Mathf.Atan2(
+                difference.x,
+                difference.y
+            )
+            *
+            Mathf.Rad2Deg;
+
+
+        river.transform.rotation =
+            Quaternion.Euler(
+                0f,
+                angle,
+                0f
+            );
+
+
+        river.transform.localScale =
+            new Vector3(
+                width,
+                riverWaterThickness,
+                length
+            );
+
+
+        Collider collider =
+            river.GetComponent<Collider>();
+
+
+        if (collider != null)
+        {
+            Destroy(collider);
+        }
+
+
+        ApplyWaterMaterial(river);
+    }
+
+
+    // ========================================================
+    // WATER MATERIAL
+    // ========================================================
+
+    private void ApplyWaterMaterial(
+        GameObject waterObject
+    )
+    {
+        Renderer renderer =
+            waterObject.GetComponent<Renderer>();
+
+
+        if (renderer == null)
+        {
+            return;
+        }
+
+
+        if (waterMaterial != null)
+        {
+            renderer.material =
+                waterMaterial;
+
+            return;
+        }
+
+
+        Shader shader =
+            Shader.Find(
+                "Universal Render Pipeline/Lit"
+            );
+
+
+        if (shader == null)
+        {
+            shader =
+                Shader.Find(
+                    "Standard"
+                );
+        }
+
+
+        if (shader == null)
+        {
+            return;
+        }
+
+
+        Material material =
+            new Material(shader);
+
+
+        material.name =
+            "Generated Water Material";
+
+
+        material.color =
+            new Color(
+                0.05f,
+                0.35f,
+                0.8f,
+                0.75f
+            );
+
+
+        if (
+            shader.name.Contains(
+                "Universal Render Pipeline"
+            )
+        )
+        {
+            material.SetFloat(
+                "_Surface",
+                1f
+            );
+
+
+            material.SetFloat(
+                "_Blend",
+                0f
+            );
+
+
+            material.SetFloat(
+                "_AlphaClip",
+                0f
+            );
+
+
+            material.renderQueue =
+                3000;
+        }
+
+
+        renderer.material =
+            material;
+    }
+
+
+    // ========================================================
+    // TERRAIN LAYERS
+    // ========================================================
+
+    private void FindAndCreateTerrainLayers()
+    {
+        if (!automaticallyCreateTerrainLayers)
+        {
+            return;
+        }
+
+
+        if (grassTexture != null)
+        {
+            grassLayer =
+                CreateTerrainLayer(
+                    grassTexture,
+                    "Automatic_Grass"
+                );
+        }
+
+
+        if (rockTexture != null)
+        {
+            rockLayer =
+                CreateTerrainLayer(
+                    rockTexture,
+                    "Automatic_Rock"
+                );
+        }
+
+
+        if (snowTexture != null)
+        {
+            snowLayer =
+                CreateTerrainLayer(
+                    snowTexture,
+                    "Automatic_Snow"
+                );
+        }
+
+
+        AssignTerrainLayers();
+    }
+
+
+    // ========================================================
+    // CREATE TERRAIN LAYER
+    // ========================================================
+
+    private TerrainLayer CreateTerrainLayer(
+        Texture2D texture,
+        string layerName
+    )
+    {
+        TerrainLayer layer =
+            new TerrainLayer();
+
+
+        layer.name =
+            layerName;
+
+
+        layer.diffuseTexture =
+            texture;
+
+
+        layer.tileSize =
+            textureTileSize;
+
+
+        layer.tileOffset =
+            textureTileOffset;
+
+
+        layer.smoothness =
+            0f;
+
+
+        layer.metallic =
+            0f;
+
+
+        return layer;
+    }
+
+
+    // ========================================================
+    // ASSIGN TERRAIN LAYERS
+    // ========================================================
+
+    private void AssignTerrainLayers()
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        List<TerrainLayer> layers =
+            new List<TerrainLayer>();
+
+
+        if (grassLayer != null)
+        {
+            layers.Add(grassLayer);
+        }
+
+
+        if (rockLayer != null)
+        {
+            layers.Add(rockLayer);
+        }
+
+
+        if (snowLayer != null)
+        {
+            layers.Add(snowLayer);
+        }
+
+
+        if (layers.Count == 0)
+        {
+            return;
+        }
+
+
+        targetTerrain
+            .terrainData
+            .terrainLayers =
+            layers.ToArray();
+    }
+
+
+    // ========================================================
+    // APPLY TERRAIN TEXTURES
+    // ========================================================
+
+    private void ApplyTerrainTextures()
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        if (!automaticallyPaintTerrain)
+        {
+            return;
+        }
+
+
+        FindAndCreateTerrainLayers();
+
+
+        TerrainData terrainData =
+            targetTerrain.terrainData;
+
+
+        List<TerrainLayer> layers =
+            new List<TerrainLayer>();
+
+
+        if (grassLayer != null)
+        {
+            layers.Add(grassLayer);
+        }
+
+
+        if (rockLayer != null)
+        {
+            layers.Add(rockLayer);
+        }
+
+
+        if (snowLayer != null)
+        {
+            layers.Add(snowLayer);
+        }
+
+
+        if (layers.Count == 0)
+        {
+            return;
+        }
+
+
+        terrainData.terrainLayers =
+            layers.ToArray();
+
+
+        int resolution =
+            terrainData.alphamapResolution;
+
+
+        int layerCount =
+            layers.Count;
+
+
+        float[,,] maps =
             new float[
                 resolution,
-                resolution
+                resolution,
+                layerCount
             ];
-
-
-        float offsetX =
-            settings.seed *
-            13.37f;
-
-
-        float offsetZ =
-            settings.seed *
-            7.91f;
-
-
-        string terrainType =
-            settings.terrainType == null
-                ? "hills"
-                : settings.terrainType
-                    .ToLower()
-                    .Trim();
 
 
         for (
@@ -609,647 +2219,629 @@ public class TerrainGenerator : MonoBehaviour
                 x++
             )
             {
-                float normalizedX =
-                    (float)x /
-                    (resolution - 1);
+                float nx =
+                    x /
+                    (float)
+                    Mathf.Max(
+                        resolution - 1,
+                        1
+                    );
 
 
-                float normalizedZ =
-                    (float)z /
-                    (resolution - 1);
+                float nz =
+                    z /
+                    (float)
+                    Mathf.Max(
+                        resolution - 1,
+                        1
+                    );
 
 
-                float height = 0f;
-
-
-                switch (terrainType)
-                {
-                    case "flat":
-
-                        height =
-                            GenerateFlatTerrain(
-                                normalizedX,
-                                normalizedZ
-                            );
-
-                        break;
-
-
-                    case "hills":
-
-                        height =
-                            GenerateHills(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
-
-                        break;
-
-
-                    case "mountain":
-                    case "mountains":
-
-                        height =
-                            GenerateMountains(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
-
-                        break;
-
-
-                    case "valley":
-
-                        height =
-                            GenerateValley(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
-
-                        break;
-
-
-                    case "island":
-
-                        height =
-                            GenerateIsland(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
-
-                        break;
-
-
-                    case "desert":
-
-                        height =
-                            GenerateDesert(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
-
-                        break;
-
-
-                    case "canyon":
-
-                        height =
-                            GenerateCanyon(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
-
-                        break;
-
-
-                    default:
-
-                        Debug.LogWarning(
-                            "TerrainGenerator: " +
-                            "Unknown terrain type '" +
-                            terrainType +
-                            "'. Using hills."
+                float height =
+                    terrainData
+                        .GetInterpolatedHeight(
+                            nx,
+                            nz
                         );
 
 
-                        height =
-                            GenerateHills(
-                                normalizedX,
-                                normalizedZ,
-                                settings,
-                                offsetX,
-                                offsetZ
-                            );
+                float normalizedHeight =
+                    terrainData.size.y > 0.001f
+                    ? height /
+                      terrainData.size.y
+                    : 0f;
 
-                        break;
+
+                normalizedHeight =
+                    Mathf.Clamp01(
+                        normalizedHeight
+                    );
+
+
+                float slope =
+                    terrainData.GetSteepness(
+                        nx,
+                        nz
+                    );
+
+
+                float rockWeight = 0f;
+
+                float snowWeight = 0f;
+
+                float grassWeight = 0f;
+
+
+                // ------------------------------------------------
+                // ROCK
+                // ------------------------------------------------
+
+                if (rockLayer != null)
+                {
+                    rockWeight =
+                        Mathf.InverseLerp(
+                            rockStartSlope,
+                            rockFullSlope,
+                            slope
+                        );
+
+
+                    rockWeight =
+                        Mathf.SmoothStep(
+                            0f,
+                            1f,
+                            rockWeight
+                        );
                 }
 
 
-                heights[z, x] =
-                    Mathf.Clamp01(
-                        height
-                    );
+                // ------------------------------------------------
+                // SNOW
+                // ------------------------------------------------
+
+                if (snowLayer != null)
+                {
+                    snowWeight =
+                        Mathf.InverseLerp(
+                            snowStartHeight,
+                            snowFullHeight,
+                            normalizedHeight
+                        );
+
+
+                    snowWeight =
+                        Mathf.SmoothStep(
+                            0f,
+                            1f,
+                            snowWeight
+                        );
+                }
+
+
+                // ------------------------------------------------
+                // GRASS
+                // ------------------------------------------------
+
+                if (grassLayer != null)
+                {
+                    grassWeight =
+                        1f -
+                        rockWeight;
+
+
+                    grassWeight *=
+                        1f -
+                        snowWeight;
+                }
+
+
+                rockWeight *=
+                    1f -
+                    snowWeight;
+
+
+                int layerIndex = 0;
+
+
+                if (grassLayer != null)
+                {
+                    maps[
+                        z,
+                        x,
+                        layerIndex
+                    ] =
+                        grassWeight;
+
+                    layerIndex++;
+                }
+
+
+                if (rockLayer != null)
+                {
+                    maps[
+                        z,
+                        x,
+                        layerIndex
+                    ] =
+                        rockWeight;
+
+                    layerIndex++;
+                }
+
+
+                if (snowLayer != null)
+                {
+                    maps[
+                        z,
+                        x,
+                        layerIndex
+                    ] =
+                        snowWeight;
+                }
+
+
+                // ------------------------------------------------
+                // NORMALIZE
+                // ------------------------------------------------
+
+                float total = 0f;
+
+
+                for (
+                    int layer = 0;
+                    layer < layerCount;
+                    layer++
+                )
+                {
+                    total +=
+                        maps[
+                            z,
+                            x,
+                            layer
+                        ];
+                }
+
+
+                if (total > 0.0001f)
+                {
+                    for (
+                        int layer = 0;
+                        layer < layerCount;
+                        layer++
+                    )
+                    {
+                        maps[
+                            z,
+                            x,
+                            layer
+                        ] /=
+                            total;
+                    }
+                }
+                else
+                {
+                    maps[
+                        z,
+                        x,
+                        0
+                    ] = 1f;
+                }
             }
         }
 
 
-        return heights;
-    }
-
-
-    // =========================================================
-    // FLAT
-    // =========================================================
-
-    private float GenerateFlatTerrain(
-        float x,
-        float z
-    )
-    {
-        return 0.02f;
-    }
-
-
-    // =========================================================
-    // HILLS
-    // =========================================================
-
-    private float GenerateHills(
-        float x,
-        float z,
-        TerrainSettings settings,
-        float offsetX,
-        float offsetZ
-    )
-    {
-        float noise =
-            FractalNoise(
-                x,
-                z,
-                settings.detailScale,
-                settings.octaves,
-                settings.roughness,
-                offsetX,
-                offsetZ
-            );
-
-
-        return noise * 0.35f;
-    }
-
-
-    // =========================================================
-    // MOUNTAINS
-    // =========================================================
-
-    private float GenerateMountains(
-        float x,
-        float z,
-        TerrainSettings settings,
-        float offsetX,
-        float offsetZ
-    )
-    {
-        float noise =
-            FractalNoise(
-                x,
-                z,
-                settings.detailScale * 0.7f,
-                settings.octaves + 1,
-                settings.roughness,
-                offsetX,
-                offsetZ
-            );
-
-
-        noise =
-            Mathf.Pow(
-                noise,
-                1.5f
-            );
-
-
-        return noise * 0.9f;
-    }
-
-
-    // =========================================================
-    // VALLEY
-    // =========================================================
-
-    private float GenerateValley(
-        float x,
-        float z,
-        TerrainSettings settings,
-        float offsetX,
-        float offsetZ
-    )
-    {
-        float noise =
-            FractalNoise(
-                x,
-                z,
-                settings.detailScale,
-                settings.octaves,
-                settings.roughness,
-                offsetX,
-                offsetZ
-            );
-
-
-        float distanceFromCenter =
-            Mathf.Abs(
-                x - 0.5f
-            );
-
-
-        float valleyShape =
-            1f -
-            Mathf.Clamp01(
-                distanceFromCenter * 2f
-            );
-
-
-        float mountains =
-            noise * 0.7f;
-
-
-        float valley =
-            valleyShape * 0.3f;
-
-
-        return Mathf.Clamp01(
-            mountains - valley
+        terrainData.SetAlphamaps(
+            0,
+            0,
+            maps
         );
+
+
+        targetTerrain.Flush();
     }
 
 
-    // =========================================================
-    // ISLAND
-    // =========================================================
+    // ========================================================
+    // URP
+    // ========================================================
 
-    private float GenerateIsland(
-        float x,
-        float z,
-        TerrainSettings settings,
-        float offsetX,
-        float offsetZ
-    )
+    private void ConfigureTerrainForURP()
     {
-        float noise =
-            FractalNoise(
-                x,
-                z,
-                settings.detailScale,
-                settings.octaves,
-                settings.roughness,
-                offsetX,
-                offsetZ
-            );
-
-
-        float centerX =
-            x - 0.5f;
-
-
-        float centerZ =
-            z - 0.5f;
-
-
-        float distance =
-            Mathf.Sqrt(
-                centerX * centerX +
-                centerZ * centerZ
-            );
-
-
-        float islandMask =
-            1f -
-            Mathf.Clamp01(
-                distance * 2f
-            );
-
-
-        islandMask =
-            Mathf.Pow(
-                islandMask,
-                1.5f
-            );
-
-
-        return noise *
-               islandMask;
-    }
-
-
-    // =========================================================
-    // DESERT
-    // =========================================================
-
-    private float GenerateDesert(
-        float x,
-        float z,
-        TerrainSettings settings,
-        float offsetX,
-        float offsetZ
-    )
-    {
-        float noise =
-            FractalNoise(
-                x,
-                z,
-                settings.detailScale * 0.5f,
-                settings.octaves,
-                settings.roughness,
-                offsetX,
-                offsetZ
-            );
-
-
-        noise =
-            Mathf.Pow(
-                noise,
-                1.3f
-            );
-
-
-        return noise * 0.3f;
-    }
-
-
-    // =========================================================
-    // CANYON
-    // =========================================================
-
-    private float GenerateCanyon(
-        float x,
-        float z,
-        TerrainSettings settings,
-        float offsetX,
-        float offsetZ
-    )
-    {
-        float noise =
-            FractalNoise(
-                x,
-                z,
-                settings.detailScale,
-                settings.octaves,
-                settings.roughness,
-                offsetX,
-                offsetZ
-            );
-
-
-        float canyonCenter =
-            0.5f +
-            Mathf.Sin(
-                z * 8f
-            ) * 0.08f;
-
-
-        float distance =
-            Mathf.Abs(
-                x - canyonCenter
-            );
-
-
-        float canyonWidth =
-            0.08f;
-
-
-        if (
-            distance <
-            canyonWidth
-        )
+        if (!configureURP)
         {
-            float canyonDepth =
-                1f -
-                (
-                    distance /
-                    canyonWidth
-                );
-
-
-            noise -=
-                canyonDepth *
-                0.6f;
+            return;
         }
 
 
-        return Mathf.Clamp01(
-            noise * 0.8f
-        );
-    }
-
-
-    // =========================================================
-    // FRACTAL PERLIN NOISE
-    // =========================================================
-
-    private float FractalNoise(
-        float x,
-        float z,
-        float scale,
-        int octaves,
-        float roughness,
-        float offsetX,
-        float offsetZ
-    )
-    {
-        float total = 0f;
-
-        float amplitude = 1f;
-
-        float frequency = 1f;
-
-        float maximum = 0f;
-
-
-        for (
-            int i = 0;
-            i < octaves;
-            i++
-        )
+        if (!HasValidTerrain())
         {
-            float sampleX =
-                x *
-                scale *
-                frequency *
-                100f
-                +
-                offsetX;
+            return;
+        }
 
 
-            float sampleZ =
-                z *
-                scale *
-                frequency *
-                100f
-                +
-                offsetZ;
+        Shader shader =
+            Shader.Find(
+                "Universal Render Pipeline/Terrain/Lit"
+            );
 
 
-            float noise =
-                Mathf.PerlinNoise(
-                    sampleX,
-                    sampleZ
-                );
+        if (shader == null)
+        {
+            Debug.LogWarning(
+                "URP Terrain Lit shader not found."
+            );
 
-
-            total +=
-                noise *
-                amplitude;
-
-
-            maximum +=
-                amplitude;
-
-
-            amplitude *=
-                Mathf.Lerp(
-                    0.5f,
-                    0.9f,
-                    roughness
-                );
-
-
-            frequency *=
-                2f;
+            return;
         }
 
 
         if (
-            maximum <= 0f
+            targetTerrain.materialTemplate != null &&
+            targetTerrain.materialTemplate.shader == shader
         )
         {
-            return 0f;
+            return;
         }
 
 
-        return total /
-               maximum;
+        Material material =
+            new Material(shader);
+
+
+        material.name =
+            "Automatic URP Terrain Lit";
+
+
+        targetTerrain.materialTemplate =
+            material;
     }
 
 
-    // =========================================================
-    // CLEAR TERRAIN
-    // =========================================================
+    // ========================================================
+    // SAVE ORIGINAL TERRAIN
+    // ========================================================
 
-    public void ClearTerrain()
+    private void SaveOriginalTerrain()
     {
-        if (generatedTerrain != null)
+        if (!HasValidTerrain())
         {
-            Destroy(
-                generatedTerrain.gameObject
-            );
-
-            generatedTerrain = null;
+            return;
         }
 
 
-        Transform parent =
-            terrainParent != null
-                ? terrainParent
-                : transform;
+        TerrainData data =
+            targetTerrain.terrainData;
+
+
+        int resolution =
+            data.heightmapResolution;
+
+
+        originalHeights =
+            data.GetHeights(
+                0,
+                0,
+                resolution,
+                resolution
+            );
+
+
+        originalHeightsSaved =
+            true;
+    }
+
+
+    // ========================================================
+    // RESTORE ORIGINAL TERRAIN
+    // ========================================================
+
+    private void RestoreOriginalTerrain()
+    {
+        if (!HasValidTerrain())
+        {
+            return;
+        }
+
+
+        if (!originalHeightsSaved)
+        {
+            return;
+        }
+
+
+        if (originalHeights == null)
+        {
+            return;
+        }
+
+
+        TerrainData data =
+            targetTerrain.terrainData;
+
+
+        data.SetHeights(
+            0,
+            0,
+            originalHeights
+        );
+
+
+        ClearGeneratedWater();
+
+
+        mountainZones.Clear();
+
+        waterFeatures.Clear();
+
+
+        RefreshTerrainCollider();
+    }
+
+
+    // ========================================================
+    // RESET TERRAIN
+    // ========================================================
+
+    public void ResetTerrain()
+    {
+        RestoreOriginalTerrain();
+
+        ApplyTerrainTextures();
+
+
+        Debug.Log(
+            "TerrainGenerator: Terrain reset."
+        );
+    }
+
+
+    // ========================================================
+    // CREATE WATER PARENT
+    // ========================================================
+
+    private void CreateWaterParent()
+    {
+        if (generatedWaterParent != null)
+        {
+            return;
+        }
+
+
+        generatedWaterParent =
+            new GameObject(
+                "Generated Water"
+            );
+
+
+        generatedWaterParent.transform.SetParent(
+            transform
+        );
+    }
+
+
+    // ========================================================
+    // CLEAR GENERATED WATER
+    // ========================================================
+
+    private void ClearGeneratedWater()
+    {
+        if (generatedWaterParent == null)
+        {
+            return;
+        }
 
 
         for (
             int i =
-                parent.childCount - 1;
+                generatedWaterParent
+                    .transform
+                    .childCount - 1;
 
             i >= 0;
 
             i--
         )
         {
-            Transform child =
-                parent.GetChild(i);
+            GameObject child =
+                generatedWaterParent
+                    .transform
+                    .GetChild(i)
+                    .gameObject;
 
 
-            if (
-                child.name ==
-                "AI_Generated_Terrain"
-            )
-            {
-                Destroy(
-                    child.gameObject
-                );
-            }
+            Destroy(child);
         }
+    }
 
 
-        Debug.Log(
-            "[TerrainGenerator] " +
-            "Generated terrain cleared."
+    // ========================================================
+    // ROTATE VECTOR
+    // ========================================================
+
+    private Vector2 RotateVector(
+        Vector2 vector,
+        float degrees
+    )
+    {
+        float radians =
+            degrees *
+            Mathf.Deg2Rad;
+
+
+        float cos =
+            Mathf.Cos(
+                radians
+            );
+
+
+        float sin =
+            Mathf.Sin(
+                radians
+            );
+
+
+        return new Vector2(
+            vector.x * cos -
+            vector.y * sin,
+
+            vector.x * sin +
+            vector.y * cos
         );
     }
 
 
-    // =========================================================
-    // RESTORE ORIGINAL PLANE
-    // =========================================================
+    // ========================================================
+    // REFRESH TERRAIN COLLIDER
+    // ========================================================
 
-    public void RestoreOriginalPlane()
+    private void RefreshTerrainCollider()
     {
-        if (existingPlane != null)
+        if (!HasValidTerrain())
         {
-            existingPlane.SetActive(true);
-
-
-            Debug.Log(
-                "[TerrainGenerator] " +
-                "Original Plane restored."
-            );
+            return;
         }
+
+
+        TerrainCollider collider =
+            targetTerrain.GetComponent<
+                TerrainCollider
+            >();
+
+
+        if (collider == null)
+        {
+            collider =
+                targetTerrain.gameObject
+                    .AddComponent<
+                        TerrainCollider
+                    >();
+        }
+
+
+        collider.terrainData =
+            targetTerrain.terrainData;
+
+
+        collider.enabled = false;
+
+        collider.enabled = true;
     }
 
 
-    // =========================================================
-    // DEFAULT TERRAIN
-    // =========================================================
+    // ========================================================
+    // VALID TERRAIN CHECK
+    // ========================================================
 
-    public void GenerateDefaultTerrain()
+    private bool HasValidTerrain()
     {
-        TerrainSettings settings =
-            new TerrainSettings();
-
-
-        settings.width =
-            defaultWidth;
-
-
-        settings.depth =
-            defaultDepth;
-
-
-        settings.height =
-            defaultHeight;
-
-
-        settings.terrainType =
-            "hills";
-
-
-        settings.roughness =
-            0.5f;
-
-
-        settings.detailScale =
-            0.03f;
-
-
-        settings.octaves =
-            4;
-
-
-        settings.seed =
-            Random.Range(
-                0,
-                999999
+        if (targetTerrain == null)
+        {
+            Debug.LogWarning(
+                "TerrainGenerator: " +
+                "Target Terrain missing."
             );
 
+            return false;
+        }
 
-        GenerateTerrain(
-            settings
-        );
+
+        if (targetTerrain.terrainData == null)
+        {
+            Debug.LogWarning(
+                "TerrainGenerator: " +
+                "TerrainData missing."
+            );
+
+            return false;
+        }
+
+
+        return true;
+    }
+
+
+    // ========================================================
+    // KEYBOARD TESTING
+    // ========================================================
+
+    private void Update()
+    {
+        // ----------------------------------------------------
+        // M = MOUNTAIN
+        // ----------------------------------------------------
+
+        if (
+            Input.GetKeyDown(
+                KeyCode.M
+            )
+        )
+        {
+            CreateMountainRange();
+            ApplyTerrainTextures();
+
+            RefreshTerrainCollider();
+        }
+
+
+        // ----------------------------------------------------
+        // L = LAKE
+        // ----------------------------------------------------
+
+        if (
+            Input.GetKeyDown(
+                KeyCode.L
+            )
+        )
+        {
+            CreateRandomLake();
+
+            RefreshTerrainCollider();
+
+        }
+
+
+        // ----------------------------------------------------
+        // R = RIVER
+        // ----------------------------------------------------
+
+        if (
+            Input.GetKeyDown(
+                KeyCode.R
+            )
+        )
+        {
+            CreateRandomRiver();
+            RefreshTerrainCollider();
+
+
+        }
+
+
+        // ----------------------------------------------------
+        // G = GENERATE EVERYTHING
+        // ----------------------------------------------------
+
+        if (
+            Input.GetKeyDown(
+                KeyCode.G
+            )
+        )
+        {
+            GenerateTerrain();
+        }
+
+
+        // ----------------------------------------------------
+        // C = RESET
+        // ----------------------------------------------------
+
+        if (
+            Input.GetKeyDown(
+                KeyCode.C
+            )
+        )
+        {
+            ResetTerrain();
+        }
     }
 }
