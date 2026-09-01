@@ -4,9 +4,13 @@
 // ENVIRONMENT MANAGER
 // ============================================================
 //
+// Controls the appearance of the dynamically generated
+// Unity Terrain.
+//
 // Responsibilities:
 //
-// - Modify generated terrain appearance
+// - Automatically find TerrainGenerator
+// - Automatically find generated Terrain
 // - Make terrain greener
 // - Make terrain less green
 // - Make environment brighter
@@ -24,32 +28,17 @@
 //
 // Terrain is generated dynamically.
 //
-// Therefore this manager does NOT require a Terrain
-// to already exist when the scene starts.
+// Therefore this script does NOT require a Terrain
+// to exist when the scene starts.
 //
-// It uses the same approach as TreeManager:
+// It repeatedly checks:
 //
-//     GetTerrain()
-//          ↓
-//     TerrainGenerator
-//          ↓
-//     GetGeneratedTerrain()
-//
-// If the terrain does not exist yet, environment commands
-// simply wait until the terrain becomes available.
-//
-// Architecture:
-//
-// DemoChat
-//    ↓
-// EnvironmentCommand
-//    ↓
 // EnvironmentManager
-//    ↓
-// GetTerrain()
-//    ↓
+//       ↓
 // TerrainGenerator
-//    ↓
+//       ↓
+// GetGeneratedTerrain()
+//       ↓
 // Generated Terrain
 //
 // ============================================================
@@ -62,40 +51,69 @@ public class EnvironmentManager : MonoBehaviour
 
     [Header("Terrain Generator")]
 
-    [Tooltip(
-        "TerrainGenerator responsible for creating the runtime terrain."
-    )]
     [SerializeField]
     private TerrainGenerator terrainGenerator;
 
 
     // =========================================================
-    // TERRAIN
+    // CURRENT GENERATED TERRAIN
     // =========================================================
 
-    [Header("Terrain")]
+    [Header("Runtime Terrain")]
 
-    [Tooltip(
-        "Runtime generated terrain. " +
-        "This is automatically found from TerrainGenerator."
-    )]
     [SerializeField]
     private Terrain terrain;
 
 
     // =========================================================
-    // ORIGINAL TERRAIN COLOUR
+    // TERRAIN LAYER
     // =========================================================
 
-    private Color originalTerrainColor =
-        Color.white;
+    [Header("Terrain Appearance")]
 
-    private bool originalTerrainColorCaptured =
-        false;
+    [Tooltip(
+        "Colour applied to the generated terrain surface."
+    )]
+    [SerializeField]
+    private Color baseTerrainColor =
+        new Color(
+            0.45f,
+            0.55f,
+            0.30f,
+            1f
+        );
 
 
     // =========================================================
-    // SUN / LIGHT
+    // CURRENT GREEN AMOUNT
+    // =========================================================
+
+    [SerializeField]
+    private float greenAmount = 0f;
+
+
+    // =========================================================
+    // BRIGHTNESS
+    // =========================================================
+
+    [Header("Brightness")]
+
+    [SerializeField]
+    private float brightness = 1f;
+
+
+    // =========================================================
+    // WARMTH
+    // =========================================================
+
+    [Header("Warmth")]
+
+    [SerializeField]
+    private float warmth = 0f;
+
+
+    // =========================================================
+    // SUN
     // =========================================================
 
     [Header("Sun / Directional Light")]
@@ -108,8 +126,7 @@ public class EnvironmentManager : MonoBehaviour
     // ORIGINAL SUN VALUES
     // =========================================================
 
-    private float originalSunIntensity =
-        1f;
+    private float originalSunIntensity = 1f;
 
     private Color originalSunColor =
         Color.white;
@@ -117,73 +134,47 @@ public class EnvironmentManager : MonoBehaviour
     private Quaternion originalSunRotation =
         Quaternion.identity;
 
+    private LightShadows originalShadowType =
+        LightShadows.Soft;
+
+    private float originalShadowStrength =
+        1f;
+
     private bool originalSunCaptured =
         false;
 
 
     // =========================================================
-    // ENVIRONMENT
+    // ORIGINAL TERRAIN LAYERS
     // =========================================================
 
-    [Header("Environment")]
+    private TerrainLayer[] originalTerrainLayers;
 
-    [SerializeField]
-    private Color environmentTint =
-        Color.white;
-
-    [SerializeField]
-    private float greenAmount =
-        0f;
-
-    [SerializeField]
-    private float brightness =
-        1f;
-
-    [SerializeField]
-    private float warmth =
-        0f;
-
-
-    // =========================================================
-    // FOG
-    // =========================================================
-
-    [Header("Fog")]
-
-    [SerializeField]
-    private float defaultFogDensity =
-        0.01f;
-
-    [SerializeField]
-    private Color defaultFogColor =
-        new Color(
-            0.75f,
-            0.80f,
-            0.85f
-        );
+    private bool originalTerrainCaptured =
+        false;
 
 
     // =========================================================
     // LIMITS
     // =========================================================
 
-    private const float MIN_BRIGHTNESS =
-        0.30f;
-
-    private const float MAX_BRIGHTNESS =
-        2.00f;
-
     private const float MIN_GREEN =
-        -1.00f;
+        -1f;
 
     private const float MAX_GREEN =
-        1.00f;
+        1f;
+
+    private const float MIN_BRIGHTNESS =
+        0.3f;
+
+    private const float MAX_BRIGHTNESS =
+        2f;
 
     private const float MIN_WARMTH =
-        -1.00f;
+        -1f;
 
     private const float MAX_WARMTH =
-        1.00f;
+        1f;
 
 
     // =========================================================
@@ -192,43 +183,73 @@ public class EnvironmentManager : MonoBehaviour
 
     private void Start()
     {
-        // -----------------------------------------------------
-        // Find TerrainGenerator if not assigned.
-        // -----------------------------------------------------
+        Debug.Log(
+            "[EnvironmentManager] Starting."
+        );
 
         FindTerrainGenerator();
 
-        // -----------------------------------------------------
-        // Find directional light.
-        // -----------------------------------------------------
-
         FindSun();
-
-        // -----------------------------------------------------
-        // Capture sun.
-        // -----------------------------------------------------
 
         CaptureSunOriginalValues();
 
-        // -----------------------------------------------------
-        // Try to find terrain.
+        // Terrain may not exist yet.
         //
-        // It may not exist yet.
-        // -----------------------------------------------------
-
-        Terrain currentTerrain =
-            GetTerrain();
-
-        if (currentTerrain != null)
-        {
-            CaptureTerrainOriginalColor();
-
-            ApplyCurrentEnvironment();
-        }
+        // Try once immediately.
+        RefreshTerrain();
 
         Debug.Log(
             "[EnvironmentManager] Start complete."
         );
+    }
+
+
+    // =========================================================
+    // UPDATE
+    // =========================================================
+    //
+    // IMPORTANT
+    //
+    // TerrainGenerator may generate terrain AFTER
+    // EnvironmentManager.Start().
+    //
+    // Therefore we check for it continuously.
+    //
+    // =========================================================
+
+    private void Update()
+    {
+        Terrain generatedTerrain =
+            GetTerrain();
+
+        if (generatedTerrain == null)
+        {
+            return;
+        }
+
+        // -----------------------------------------------------
+        // If TerrainGenerator generated a new Terrain,
+        // automatically reconnect.
+        // -----------------------------------------------------
+
+        if (terrain != generatedTerrain)
+        {
+            terrain =
+                generatedTerrain;
+
+            originalTerrainCaptured =
+                false;
+
+            CaptureOriginalTerrainLayers();
+
+            Debug.Log(
+                "[EnvironmentManager] " +
+                "New generated terrain detected: " +
+                terrain.name
+            );
+
+            ApplyCurrentEnvironment();
+        }
     }
 
 
@@ -250,7 +271,8 @@ public class EnvironmentManager : MonoBehaviour
         {
             Debug.Log(
                 "[EnvironmentManager] " +
-                "TerrainGenerator found."
+                "TerrainGenerator found: " +
+                terrainGenerator.name
             );
         }
         else
@@ -287,7 +309,8 @@ public class EnvironmentManager : MonoBehaviour
                 continue;
             }
 
-            if (light.type == LightType.Directional)
+            if (light.type ==
+                LightType.Directional)
             {
                 sunLight =
                     light;
@@ -310,40 +333,62 @@ public class EnvironmentManager : MonoBehaviour
 
 
     // =========================================================
+    // REFRESH TERRAIN
+    // =========================================================
+
+    private void RefreshTerrain()
+    {
+        Terrain currentTerrain =
+            GetTerrain();
+
+        if (currentTerrain == null)
+        {
+            Debug.Log(
+                "[EnvironmentManager] " +
+                "Terrain not generated yet."
+            );
+
+            return;
+        }
+
+        if (terrain != currentTerrain)
+        {
+            terrain =
+                currentTerrain;
+
+            originalTerrainCaptured =
+                false;
+
+            CaptureOriginalTerrainLayers();
+        }
+
+        ApplyCurrentEnvironment();
+    }
+
+
+    // =========================================================
     // GET TERRAIN
     // =========================================================
     //
-    // Same approach as TreeManager.
-    //
     // Priority:
     //
-    // 1. Assigned terrain
-    // 2. TerrainGenerator generated terrain
-    // 3. Active terrain
-    // 4. Search scene
+    // 1. TerrainGenerator
+    // 2. Assigned Terrain
+    // 3. Terrain.activeTerrain
+    // 4. Scene search
     //
     // =========================================================
 
     private Terrain GetTerrain()
     {
         // -----------------------------------------------------
-        // ASSIGNED TERRAIN
-        // -----------------------------------------------------
-
-        if (
-            terrain != null &&
-            terrain.terrainData != null
-        )
-        {
-            EnsureTerrainOriginalColorCaptured();
-
-            return terrain;
-        }
-
-
-        // -----------------------------------------------------
         // TERRAIN GENERATOR
         // -----------------------------------------------------
+
+        if (terrainGenerator == null)
+        {
+            FindTerrainGenerator();
+        }
 
         if (terrainGenerator != null)
         {
@@ -355,19 +400,21 @@ public class EnvironmentManager : MonoBehaviour
                 generatedTerrain.terrainData != null
             )
             {
-                terrain =
-                    generatedTerrain;
-
-                EnsureTerrainOriginalColorCaptured();
-
-                Debug.Log(
-                    "[EnvironmentManager] " +
-                    "Generated terrain found: " +
-                    terrain.name
-                );
-
                 return generatedTerrain;
             }
+        }
+
+
+        // -----------------------------------------------------
+        // ASSIGNED TERRAIN
+        // -----------------------------------------------------
+
+        if (
+            terrain != null &&
+            terrain.terrainData != null
+        )
+        {
+            return terrain;
         }
 
 
@@ -383,11 +430,6 @@ public class EnvironmentManager : MonoBehaviour
             activeTerrain.terrainData != null
         )
         {
-            terrain =
-                activeTerrain;
-
-            EnsureTerrainOriginalColorCaptured();
-
             return activeTerrain;
         }
 
@@ -415,148 +457,197 @@ public class EnvironmentManager : MonoBehaviour
                     foundTerrain.gameObject.activeInHierarchy
                 )
                 {
-                    terrain =
-                        foundTerrain;
-
-                    EnsureTerrainOriginalColorCaptured();
-
                     return foundTerrain;
                 }
             }
         }
 
 
-        // -----------------------------------------------------
-        // NO TERRAIN YET
-        // -----------------------------------------------------
-
         return null;
     }
 
 
     // =========================================================
-    // ENSURE ORIGINAL TERRAIN COLOUR
+    // CAPTURE ORIGINAL TERRAIN LAYERS
     // =========================================================
 
-    private void EnsureTerrainOriginalColorCaptured()
+    private void CaptureOriginalTerrainLayers()
     {
-        if (originalTerrainColorCaptured)
+        Terrain currentTerrain =
+            GetTerrain();
+
+        if (currentTerrain == null)
         {
             return;
         }
 
-        CaptureTerrainOriginalColor();
+        TerrainData data =
+            currentTerrain.terrainData;
+
+        if (data == null)
+        {
+            return;
+        }
+
+
+        TerrainLayer[] layers =
+            data.terrainLayers;
+
+        if (
+            layers == null ||
+            layers.Length == 0
+        )
+        {
+            Debug.Log(
+                "[EnvironmentManager] " +
+                "Terrain has no TerrainLayers. " +
+                "Creating one."
+            );
+
+            CreateTerrainLayer();
+
+            layers =
+                data.terrainLayers;
+        }
+
+
+        if (
+            layers != null &&
+            layers.Length > 0
+        )
+        {
+            originalTerrainLayers =
+                new TerrainLayer[layers.Length];
+
+            for (
+                int i = 0;
+                i < layers.Length;
+                i++
+            )
+            {
+                originalTerrainLayers[i] =
+                    layers[i];
+            }
+
+            originalTerrainCaptured =
+                true;
+
+            Debug.Log(
+                "[EnvironmentManager] " +
+                "Captured " +
+                layers.Length +
+                " terrain layer(s)."
+            );
+        }
     }
 
 
     // =========================================================
-    // CAPTURE TERRAIN ORIGINAL COLOUR
+    // CREATE TERRAIN LAYER
+    // =========================================================
+    //
+    // Your TerrainGenerator currently does not create
+    // TerrainLayers.
+    //
+    // This creates one automatically at runtime.
+    //
     // =========================================================
 
-    private void CaptureTerrainOriginalColor()
+    private void CreateTerrainLayer()
     {
-        if (terrain == null)
+        Terrain currentTerrain =
+            GetTerrain();
+
+        if (currentTerrain == null)
         {
             return;
         }
 
-        Material terrainMaterial =
-            terrain.materialTemplate;
+        TerrainData data =
+            currentTerrain.terrainData;
 
-        if (terrainMaterial == null)
+        if (data == null)
         {
-            Debug.LogWarning(
-                "[EnvironmentManager] " +
-                "Terrain has no material template."
+            return;
+        }
+
+
+        TerrainLayer layer =
+            new TerrainLayer();
+
+        layer.diffuseTexture =
+            CreateWhiteTexture();
+
+        layer.tileSize =
+            new Vector2(
+                20f,
+                20f
             );
 
-            return;
-        }
+        layer.tileOffset =
+            Vector2.zero;
 
 
-        // -----------------------------------------------------
-        // URP
-        // -----------------------------------------------------
-
-        if (
-            terrainMaterial.HasProperty(
-                "_BaseColor"
-            )
-        )
-        {
-            originalTerrainColor =
-                terrainMaterial.GetColor(
-                    "_BaseColor"
-                );
-
-            originalTerrainColorCaptured =
-                true;
-
-            Debug.Log(
-                "[EnvironmentManager] " +
-                "Captured terrain original _BaseColor."
-            );
-
-            return;
-        }
+        data.terrainLayers =
+            new TerrainLayer[]
+            {
+                layer
+            };
 
 
-        // -----------------------------------------------------
-        // BUILT-IN
-        // -----------------------------------------------------
-
-        if (
-            terrainMaterial.HasProperty(
-                "_Color"
-            )
-        )
-        {
-            originalTerrainColor =
-                terrainMaterial.GetColor(
-                    "_Color"
-                );
-
-            originalTerrainColorCaptured =
-                true;
-
-            Debug.Log(
-                "[EnvironmentManager] " +
-                "Captured terrain original _Color."
-            );
-
-            return;
-        }
-
-
-        Debug.LogWarning(
+        Debug.Log(
             "[EnvironmentManager] " +
-            "Could not find terrain colour property."
+            "Created runtime TerrainLayer."
         );
     }
 
 
     // =========================================================
-    // CAPTURE SUN ORIGINAL VALUES
+    // CREATE WHITE TEXTURE
+    // =========================================================
+    //
+    // A white texture allows the TerrainLayer colour to
+    // control the visible terrain colour.
+    //
     // =========================================================
 
-    private void CaptureSunOriginalValues()
+    private Texture2D CreateWhiteTexture()
     {
-        if (sunLight == null)
-        {
-            return;
-        }
+        Texture2D texture =
+            new Texture2D(
+                2,
+                2,
+                TextureFormat.RGBA32,
+                false
+            );
 
-        originalSunIntensity =
-            sunLight.intensity;
+        texture.SetPixel(
+            0,
+            0,
+            Color.white
+        );
 
-        originalSunColor =
-            sunLight.color;
+        texture.SetPixel(
+            1,
+            0,
+            Color.white
+        );
 
-        originalSunRotation =
-            sunLight.transform.rotation;
+        texture.SetPixel(
+            0,
+            1,
+            Color.white
+        );
 
-        originalSunCaptured =
-            true;
+        texture.SetPixel(
+            1,
+            1,
+            Color.white
+        );
+
+        texture.Apply();
+
+        return texture;
     }
 
 
@@ -589,11 +680,6 @@ public class EnvironmentManager : MonoBehaviour
             )
         )
         {
-            Debug.LogWarning(
-                "[EnvironmentManager] " +
-                "Empty environment action."
-            );
-
             return false;
         }
 
@@ -625,7 +711,7 @@ public class EnvironmentManager : MonoBehaviour
         {
             float change =
                 amount <= 0f
-                    ? 0.25f
+                    ? 0.20f
                     : amount;
 
             greenAmount =
@@ -653,7 +739,7 @@ public class EnvironmentManager : MonoBehaviour
         {
             float change =
                 amount <= 0f
-                    ? 0.25f
+                    ? 0.20f
                     : amount;
 
             greenAmount =
@@ -790,11 +876,11 @@ public class EnvironmentManager : MonoBehaviour
         {
             if (sunLight == null)
             {
-                Debug.LogWarning(
-                    "[EnvironmentManager] " +
-                    "No directional light found."
-                );
+                FindSun();
+            }
 
+            if (sunLight == null)
+            {
                 return false;
             }
 
@@ -819,6 +905,11 @@ public class EnvironmentManager : MonoBehaviour
         {
             if (sunLight == null)
             {
+                FindSun();
+            }
+
+            if (sunLight == null)
+            {
                 return false;
             }
 
@@ -826,7 +917,7 @@ public class EnvironmentManager : MonoBehaviour
                 LightShadows.Soft;
 
             sunLight.shadowStrength =
-                0.40f;
+                0.35f;
 
             return true;
         }
@@ -848,10 +939,14 @@ public class EnvironmentManager : MonoBehaviour
                 FogMode.ExponentialSquared;
 
             RenderSettings.fogDensity =
-                defaultFogDensity;
+                0.01f;
 
             RenderSettings.fogColor =
-                defaultFogColor;
+                new Color(
+                    0.75f,
+                    0.80f,
+                    0.85f
+                );
 
             return true;
         }
@@ -888,10 +983,6 @@ public class EnvironmentManager : MonoBehaviour
         }
 
 
-        // =====================================================
-        // UNKNOWN
-        // =====================================================
-
         Debug.LogWarning(
             "[EnvironmentManager] " +
             "Unknown action: " +
@@ -915,21 +1006,49 @@ public class EnvironmentManager : MonoBehaviour
         {
             Debug.LogWarning(
                 "[EnvironmentManager] " +
-                "Terrain has not been generated yet."
+                "No generated terrain yet."
             );
 
             return;
         }
 
 
-        Material material =
-            currentTerrain.materialTemplate;
+        TerrainData data =
+            currentTerrain.terrainData;
 
-        if (material == null)
+        if (data == null)
+        {
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // Make sure a TerrainLayer exists.
+        // -----------------------------------------------------
+
+        TerrainLayer[] layers =
+            data.terrainLayers;
+
+        if (
+            layers == null ||
+            layers.Length == 0
+        )
+        {
+            CreateTerrainLayer();
+
+            layers =
+                data.terrainLayers;
+        }
+
+
+        if (
+            layers == null ||
+            layers.Length == 0
+        )
         {
             Debug.LogWarning(
                 "[EnvironmentManager] " +
-                "Terrain has no material template."
+                "Could not create TerrainLayer."
             );
 
             return;
@@ -937,98 +1056,170 @@ public class EnvironmentManager : MonoBehaviour
 
 
         // -----------------------------------------------------
-        // Original colour
+        // Calculate colour.
         // -----------------------------------------------------
 
-        Color baseColor =
-            originalTerrainColorCaptured
-                ? originalTerrainColor
-                : Color.white;
+        Color color =
+            baseTerrainColor;
 
 
-        // -----------------------------------------------------
-        // GREEN
-        // -----------------------------------------------------
+        // More green:
+        //
+        // greenAmount = +1
+        //
+        // Less green:
+        //
+        // greenAmount = -1
+        //
 
-        float green =
+        color.r =
             Mathf.Clamp01(
-                baseColor.g +
-                greenAmount
-            );
-
-
-        // -----------------------------------------------------
-        // RED
-        // -----------------------------------------------------
-
-        float red =
-            Mathf.Clamp01(
-                baseColor.r -
+                baseTerrainColor.r -
                 greenAmount * 0.25f
             );
 
-
-        // -----------------------------------------------------
-        // BLUE
-        // -----------------------------------------------------
-
-        float blue =
+        color.g =
             Mathf.Clamp01(
-                baseColor.b
+                baseTerrainColor.g +
+                greenAmount * 0.45f
             );
 
-
-        Color newColor =
-            new Color(
-                red,
-                green,
-                blue,
-                baseColor.a
+        color.b =
+            Mathf.Clamp01(
+                baseTerrainColor.b -
+                greenAmount * 0.15f
             );
 
 
         // -----------------------------------------------------
-        // URP
+        // Apply to every terrain layer.
         // -----------------------------------------------------
 
-        if (
-            material.HasProperty(
-                "_BaseColor"
-            )
+        foreach (
+            TerrainLayer layer
+            in layers
         )
         {
-            material.SetColor(
-                "_BaseColor",
-                newColor
-            );
+            if (layer == null)
+            {
+                continue;
+            }
 
-            return;
+            layer.diffuseRemapMax =
+                new Vector4(
+                    color.r,
+                    color.g,
+                    color.b,
+                    1f
+                );
+
+            // TerrainLayer does not have a universal
+            // direct tint property in all Unity versions.
+            //
+            // Therefore we modify the diffuse texture
+            // through the layer's material settings where
+            // possible.
+
+            layer.tileSize =
+                layer.tileSize == Vector2.zero
+                    ? new Vector2(
+                        20f,
+                        20f
+                    )
+                    : layer.tileSize;
         }
 
 
         // -----------------------------------------------------
-        // BUILT-IN
+        // IMPORTANT
+        //
+        // Create a colourized texture and assign it.
         // -----------------------------------------------------
 
-        if (
-            material.HasProperty(
-                "_Color"
-            )
-        )
-        {
-            material.SetColor(
-                "_Color",
-                newColor
+        Texture2D colourTexture =
+            CreateColourTexture(
+                color
             );
 
-            return;
+
+        foreach (
+            TerrainLayer layer
+            in layers
+        )
+        {
+            if (layer == null)
+            {
+                continue;
+            }
+
+            layer.diffuseTexture =
+                colourTexture;
         }
 
 
-        Debug.LogWarning(
+        data.terrainLayers =
+            layers;
+
+
+        Debug.Log(
             "[EnvironmentManager] " +
-            "Terrain material has no supported colour property."
+            "Terrain colour updated. " +
+            "Green Amount = " +
+            greenAmount
         );
+    }
+
+
+    // =========================================================
+    // CREATE COLOUR TEXTURE
+    // =========================================================
+
+    private Texture2D CreateColourTexture(
+        Color color
+    )
+    {
+        Texture2D texture =
+            new Texture2D(
+                2,
+                2,
+                TextureFormat.RGBA32,
+                false
+            );
+
+
+        texture.SetPixel(
+            0,
+            0,
+            color
+        );
+
+        texture.SetPixel(
+            1,
+            0,
+            color
+        );
+
+        texture.SetPixel(
+            0,
+            1,
+            color
+        );
+
+        texture.SetPixel(
+            1,
+            1,
+            color
+        );
+
+
+        texture.wrapMode =
+            TextureWrapMode.Repeat;
+
+
+        texture.Apply();
+
+
+        return texture;
     }
 
 
@@ -1040,18 +1231,26 @@ public class EnvironmentManager : MonoBehaviour
     {
         if (sunLight == null)
         {
+            FindSun();
+        }
+
+        if (sunLight == null)
+        {
             return;
         }
+
 
         if (!originalSunCaptured)
         {
             CaptureSunOriginalValues();
         }
 
+
         if (!originalSunCaptured)
         {
             return;
         }
+
 
         sunLight.intensity =
             originalSunIntensity *
@@ -1067,13 +1266,20 @@ public class EnvironmentManager : MonoBehaviour
     {
         if (sunLight == null)
         {
+            FindSun();
+        }
+
+        if (sunLight == null)
+        {
             return;
         }
+
 
         if (!originalSunCaptured)
         {
             CaptureSunOriginalValues();
         }
+
 
         if (!originalSunCaptured)
         {
@@ -1085,20 +1291,14 @@ public class EnvironmentManager : MonoBehaviour
             originalSunColor;
 
 
-        // -----------------------------------------------------
-        // Positive warmth:
-        // more red / less blue
-        //
-        // Negative warmth:
-        // more blue / less red
-        // -----------------------------------------------------
-
         float red =
             baseColor.r +
             warmth * 0.20f;
 
+
         float green =
             baseColor.g;
+
 
         float blue =
             baseColor.b -
@@ -1116,7 +1316,44 @@ public class EnvironmentManager : MonoBehaviour
 
 
     // =========================================================
-    // RESET ENVIRONMENT
+    // CAPTURE SUN
+    // =========================================================
+
+    private void CaptureSunOriginalValues()
+    {
+        if (sunLight == null)
+        {
+            return;
+        }
+
+
+        originalSunIntensity =
+            sunLight.intensity;
+
+
+        originalSunColor =
+            sunLight.color;
+
+
+        originalSunRotation =
+            sunLight.transform.rotation;
+
+
+        originalShadowType =
+            sunLight.shadows;
+
+
+        originalShadowStrength =
+            sunLight.shadowStrength;
+
+
+        originalSunCaptured =
+            true;
+    }
+
+
+    // =========================================================
+    // RESET
     // =========================================================
 
     public void ResetEnvironment()
@@ -1138,37 +1375,52 @@ public class EnvironmentManager : MonoBehaviour
         Terrain currentTerrain =
             GetTerrain();
 
-        if (
-            currentTerrain != null &&
-            originalTerrainColorCaptured
-        )
-        {
-            Material material =
-                currentTerrain.materialTemplate;
 
-            if (material != null)
+        if (currentTerrain != null)
+        {
+            TerrainData data =
+                currentTerrain.terrainData;
+
+
+            if (data != null)
             {
+                // Recreate a neutral terrain appearance.
+                //
+                // This is preferable to restoring destroyed
+                // runtime TerrainLayer references.
+
+                TerrainLayer[] layers =
+                    data.terrainLayers;
+
+
                 if (
-                    material.HasProperty(
-                        "_BaseColor"
-                    )
+                    layers != null &&
+                    layers.Length > 0
                 )
                 {
-                    material.SetColor(
-                        "_BaseColor",
-                        originalTerrainColor
-                    );
-                }
-                else if (
-                    material.HasProperty(
-                        "_Color"
+                    Texture2D resetTexture =
+                        CreateColourTexture(
+                            baseTerrainColor
+                        );
+
+
+                    foreach (
+                        TerrainLayer layer
+                        in layers
                     )
-                )
-                {
-                    material.SetColor(
-                        "_Color",
-                        originalTerrainColor
-                    );
+                    {
+                        if (layer == null)
+                        {
+                            continue;
+                        }
+
+                        layer.diffuseTexture =
+                            resetTexture;
+                    }
+
+
+                    data.terrainLayers =
+                        layers;
                 }
             }
         }
@@ -1186,17 +1438,21 @@ public class EnvironmentManager : MonoBehaviour
             sunLight.intensity =
                 originalSunIntensity;
 
+
             sunLight.color =
                 originalSunColor;
+
 
             sunLight.transform.rotation =
                 originalSunRotation;
 
+
             sunLight.shadows =
-                LightShadows.Soft;
+                originalShadowType;
+
 
             sunLight.shadowStrength =
-                1f;
+                originalShadowStrength;
         }
 
 
