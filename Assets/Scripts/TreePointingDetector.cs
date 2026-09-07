@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿
+using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
 
 // ============================================================
@@ -11,20 +12,33 @@ using UnityEngine.XR.Interaction.Toolkit.Interactors;
 //      ↓
 // selectedTree = Tree_3
 //
-// Move ray to ground
+// Move ray to ground position A
 //      ↓
-// selectedTree = Tree_3       ← REMAINS SELECTED
-// groundPosition = new point
+// selectedTree = Tree_3
+// groundPosition = A
+//
+// Move ray to ground position B
+//      ↓
+// selectedTree = Tree_3
+// groundPosition = B
+//
+// Move ray to ground position C
+//      ↓
+// selectedTree = Tree_3
+// groundPosition = C
 //
 // Move ray to another object
 //      ↓
-// selectedTree = Tree_3       ← REMAINS SELECTED
+// selectedTree = Tree_3
+// groundPosition = last ground position
 //
 // Move ray into empty space
 //      ↓
-// selectedTree = Tree_3       ← REMAINS SELECTED
+// selectedTree = Tree_3
+// groundPosition = last ground position
 //
 // Say:
+//
 // "Move this tree over there."
 //
 // DemoChat receives:
@@ -34,7 +48,24 @@ using UnityEngine.XR.Interaction.Toolkit.Interactors;
 // selectedTreeName
 // lastGroundPosition
 //
-// Selection is ONLY cleared when:
+// ============================================================
+//
+// IMPORTANT:
+//
+// selectedTree and pointedTree are DIFFERENT.
+//
+// pointedTree:
+//     What the ray is pointing at RIGHT NOW.
+//
+// selectedTree:
+//     The tree selected previously.
+//
+// selectedTree DOES NOT become null when the ray moves away.
+//
+// groundPosition:
+//     ALWAYS updates when the ray points at Terrain.
+//
+// Selection is ONLY cleared by:
 //
 // ClearSelection()
 // ClearAll()
@@ -63,20 +94,6 @@ public class TreePointingDetector : MonoBehaviour
     // =========================================================
     // SELECTED TREE
     // =========================================================
-    //
-    // IMPORTANT:
-    //
-    // This is NOT the same as pointedTree.
-    //
-    // pointedTree:
-    //     What the ray is pointing at RIGHT NOW.
-    //
-    // selectedTree:
-    //     The tree the user selected previously.
-    //
-    // selectedTree DOES NOT become null just because the
-    // ray moves away from the tree.
-    //
 
     private TreeSelectable selectedTree;
 
@@ -91,13 +108,19 @@ public class TreePointingDetector : MonoBehaviour
 
 
     // =========================================================
-    // DEBUG STATE
+    // DEBUG
     // =========================================================
-    //
-    // These are only used to avoid repeating the same
-    // information in the Console every frame.
-    //
 
+    [Header("Debug")]
+
+    [SerializeField]
+    private bool debugGroundPosition = true;
+
+    [SerializeField]
+    private bool debugTreeSelection = true;
+
+
+    // Used only to avoid repeated logs
     private bool wasPointingAtGround;
 
     private bool wasRayHittingSomething;
@@ -123,18 +146,20 @@ public class TreePointingDetector : MonoBehaviour
         // IMPORTANT
         // -----------------------------------------------------
         //
-        // pointedTree is the CURRENT ray target.
+        // pointedTree is reset every frame because it means:
         //
-        // selectedTree is NOT touched here unless the ray
-        // actually hits another TreeSelectable.
+        // "What am I pointing at RIGHT NOW?"
         //
+        // selectedTree is NOT reset.
+        //
+        // -----------------------------------------------------
 
         pointedTree = null;
 
 
-        // -----------------------------------------------------
+        // =====================================================
         // NO RAY
-        // -----------------------------------------------------
+        // =====================================================
 
         if (rayInteractor == null)
         {
@@ -142,20 +167,23 @@ public class TreePointingDetector : MonoBehaviour
         }
 
 
-        // -----------------------------------------------------
-        // GET CURRENT RAY HIT
-        // -----------------------------------------------------
+        // =====================================================
+        // GET CURRENT 3D RAYCAST HIT
+        // =====================================================
+
+        RaycastHit hit;
 
         if (!rayInteractor.TryGetCurrent3DRaycastHit(
-                out RaycastHit hit))
+                out hit))
         {
             wasRayHittingSomething = false;
             wasPointingAtGround = false;
 
             // IMPORTANT:
             //
-            // Do NOT clear selectedTree.
-            //
+            // DO NOT clear selectedTree.
+            // DO NOT clear groundPosition.
+
             return;
         }
 
@@ -174,7 +202,7 @@ public class TreePointingDetector : MonoBehaviour
         if (tree != null)
         {
             // -------------------------------------------------
-            // CURRENTLY POINTING AT THIS TREE
+            // CURRENTLY POINTING AT TREE
             // -------------------------------------------------
 
             pointedTree = tree;
@@ -183,22 +211,20 @@ public class TreePointingDetector : MonoBehaviour
             // -------------------------------------------------
             // SELECT TREE
             // -------------------------------------------------
-            //
-            // Only change selectedTree if it is actually
-            // a different tree.
-            //
 
             if (selectedTree != tree)
             {
                 selectedTree = tree;
 
-
-                Debug.Log(
-                    "[TreePointingDetector] Selected: " +
-                    selectedTree.GetTreeName() +
-                    " | ID=" +
-                    selectedTree.treeIndex
-                );
+                if (debugTreeSelection)
+                {
+                    Debug.Log(
+                        "[TreePointingDetector] Selected: " +
+                        selectedTree.GetTreeName() +
+                        " | ID=" +
+                        selectedTree.treeIndex
+                    );
+                }
             }
 
 
@@ -216,11 +242,34 @@ public class TreePointingDetector : MonoBehaviour
             hit.collider.GetComponent<Terrain>();
 
 
+        // -----------------------------------------------------
+        // If collider itself does not have Terrain,
+        // check its parent.
+        // -----------------------------------------------------
+
+        if (terrain == null)
+        {
+            terrain =
+                hit.collider.GetComponentInParent<Terrain>();
+        }
+
+
         if (terrain != null)
         {
-            // -------------------------------------------------
-            // REMEMBER GROUND POSITION
-            // -------------------------------------------------
+            // =================================================
+            // ALWAYS UPDATE GROUND POSITION
+            // =================================================
+            //
+            // THIS IS THE IMPORTANT FIX.
+            //
+            // Every time the ray moves to another point on the
+            // terrain, groundPosition is replaced.
+            //
+            // =================================================
+
+            Vector3 previousPosition =
+                groundPosition;
+
 
             groundPosition =
                 hit.point;
@@ -230,35 +279,49 @@ public class TreePointingDetector : MonoBehaviour
                 true;
 
 
-            // -------------------------------------------------
-            // ONLY LOG WHEN WE FIRST ENTER GROUND
-            // -------------------------------------------------
+            // =================================================
+            // DEBUG GROUND POSITION
+            // =================================================
             //
-            // NOT EVERY FRAME.
+            // Log only when the position actually changes.
             //
+            // =================================================
 
-            if (!wasPointingAtGround)
+            if (debugGroundPosition)
             {
-                Debug.Log(
-                    "[TreePointingDetector] Ground target acquired: " +
-                    groundPosition
-                );
+                float distance =
+                    Vector3.Distance(
+                        previousPosition,
+                        groundPosition
+                    );
+
+
+                if (!wasPointingAtGround ||
+                    distance > 0.01f)
+                {
+                    Debug.Log(
+                        "[TreePointingDetector] " +
+                        "Ground position updated: " +
+                        groundPosition
+                    );
+                }
             }
 
 
             wasPointingAtGround = true;
 
 
-            // -------------------------------------------------
+            // =================================================
             // VERY IMPORTANT
-            // -------------------------------------------------
+            // =================================================
             //
-            // DO NOT DO THIS:
+            // DO NOT DO:
             //
             // selectedTree = null;
             //
-            // The selected tree must remain remembered.
+            // selected tree remains selected.
             //
+            // =================================================
 
             return;
         }
@@ -268,24 +331,18 @@ public class TreePointingDetector : MonoBehaviour
         // OTHER OBJECT
         // =====================================================
         //
-        // The ray may hit:
+        // Examples:
         //
+        // - House
+        // - Rock
         // - UI
-        // - another collider
-        // - controller-related object
-        // - house
-        // - rock
-        // - etc.
+        // - Another collider
+        // - Object
         //
-        // DO NOTHING.
+        // DO NOT clear selectedTree.
+        // DO NOT clear groundPosition.
         //
-        // Most importantly:
-        //
-        // DO NOT CLEAR selectedTree.
-        // DO NOT CLEAR groundPosition.
-        //
-        // Also DO NOT print a message every frame.
-        //
+        // =====================================================
 
         wasPointingAtGround = false;
     }
@@ -322,7 +379,6 @@ public class TreePointingDetector : MonoBehaviour
             return -1;
         }
 
-
         return selectedTree.treeIndex;
     }
 
@@ -338,13 +394,12 @@ public class TreePointingDetector : MonoBehaviour
             return "";
         }
 
-
         return selectedTree.GetTreeName();
     }
 
 
     // =========================================================
-    // IS TREE SELECTED
+    // HAS SELECTED TREE
     // =========================================================
 
     public bool HasSelectedTree()
@@ -354,7 +409,7 @@ public class TreePointingDetector : MonoBehaviour
 
 
     // =========================================================
-    // IS CURRENTLY POINTING AT TREE
+    // CURRENTLY POINTING AT TREE
     // =========================================================
 
     public bool IsPointingAtTree()
@@ -364,7 +419,7 @@ public class TreePointingDetector : MonoBehaviour
 
 
     // =========================================================
-    // IS CURRENTLY POINTING AT GROUND
+    // CURRENTLY POINTING AT GROUND
     // =========================================================
 
     public bool IsPointingAtGround()
@@ -375,8 +430,10 @@ public class TreePointingDetector : MonoBehaviour
         }
 
 
+        RaycastHit hit;
+
         if (!rayInteractor.TryGetCurrent3DRaycastHit(
-                out RaycastHit hit))
+                out hit))
         {
             return false;
         }
@@ -386,12 +443,19 @@ public class TreePointingDetector : MonoBehaviour
             hit.collider.GetComponent<Terrain>();
 
 
+        if (terrain == null)
+        {
+            terrain =
+                hit.collider.GetComponentInParent<Terrain>();
+        }
+
+
         return terrain != null;
     }
 
 
     // =========================================================
-    // GET GROUND POSITION
+    // GET CURRENT GROUND POSITION
     // =========================================================
 
     public Vector3 GetGroundPosition()
@@ -404,19 +468,29 @@ public class TreePointingDetector : MonoBehaviour
     // TRY GET GROUND POSITION
     // =========================================================
     //
-    // Returns the LAST remembered terrain position.
+    // Returns the LAST terrain position detected.
     //
-    // The user does NOT need to continue pointing at the
-    // ground after the position has been recorded.
+    // Example:
     //
+    // Point at:
+    //
+    // (10, 0, 20)
+    //
+    // groundPosition = (10, 0, 20)
+    //
+    // Move ray to:
+    //
+    // (30, 0, 50)
+    //
+    // groundPosition = (30, 0, 50)
+    //
+    // =========================================================
 
     public bool TryGetGroundPosition(
-        out Vector3 position
-    )
+        out Vector3 position)
     {
         position =
             groundPosition;
-
 
         return hasGroundPosition;
     }
@@ -425,17 +499,14 @@ public class TreePointingDetector : MonoBehaviour
     // =========================================================
     // CLEAR TREE SELECTION
     // =========================================================
-    //
-    // This is the ONLY normal operation that should remove
-    // the selected tree.
-    //
 
     public void ClearSelection()
     {
         if (selectedTree != null)
         {
             Debug.Log(
-                "[TreePointingDetector] Selection cleared: " +
+                "[TreePointingDetector] " +
+                "Selection cleared: " +
                 selectedTree.GetTreeName()
             );
         }
@@ -451,7 +522,8 @@ public class TreePointingDetector : MonoBehaviour
 
     public void ClearGroundPosition()
     {
-        hasGroundPosition = false;
+        hasGroundPosition =
+            false;
 
         groundPosition =
             Vector3.zero;
@@ -461,7 +533,8 @@ public class TreePointingDetector : MonoBehaviour
 
 
         Debug.Log(
-            "[TreePointingDetector] Ground position cleared."
+            "[TreePointingDetector] " +
+            "Ground position cleared."
         );
     }
 
@@ -473,6 +546,7 @@ public class TreePointingDetector : MonoBehaviour
     public void ClearAll()
     {
         ClearSelection();
+
         ClearGroundPosition();
     }
 
@@ -480,10 +554,6 @@ public class TreePointingDetector : MonoBehaviour
     // =========================================================
     // DEBUG INFORMATION
     // =========================================================
-    //
-    // Useful for checking the state without generating
-    // messages every frame.
-    //
 
     public string GetDebugState()
     {
@@ -506,8 +576,14 @@ public class TreePointingDetector : MonoBehaviour
 
 
         return
-            "Pointed Tree: " + pointed +
-            "\nSelected Tree: " + selected +
-            "\nGround Position: " + ground;
+            "Pointed Tree: " +
+            pointed +
+
+            "\nSelected Tree: " +
+            selected +
+
+            "\nGround Position: " +
+            ground;
     }
 }
+

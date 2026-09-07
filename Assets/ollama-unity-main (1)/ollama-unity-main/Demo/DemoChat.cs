@@ -8,13 +8,9 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
 
-
-
 public class DemoChat : MonoBehaviour
 {
-    // =========================================================
-    // OLLAMA
-    // =========================================================
+  
 
     [Header("Ollama")]
 
@@ -26,10 +22,7 @@ public class DemoChat : MonoBehaviour
     private string demoModel =
         "qwen3:4b";
 
-
-    // =========================================================
-    // UI
-    // =========================================================
+   
 
     [Header("UI")]
 
@@ -47,11 +40,8 @@ public class DemoChat : MonoBehaviour
     // TERRAIN
     // =========================================================
 
-    [Header("Existing Terrain")]
+    [Header("Terrain")]
 
-    [Tooltip(
-        "TerrainGenerator that modifies the EXISTING Unity Terrain."
-    )]
     [SerializeField]
     private TerrainGenerator terrainGenerator;
 
@@ -67,7 +57,7 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // XR TREE POINTING
+    // TREE POINTING
     // =========================================================
 
     [Header("XR Tree Pointing")]
@@ -77,37 +67,23 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // CROPS
-    // =========================================================
-
-    [Header("Crops")]
-
-    [SerializeField]
-    private CropManager cropManager;
-
-
-    // =========================================================
-    // ENVIRONMENT
-    // =========================================================
-
-    [Header("Environment")]
-
-    [SerializeField]
-    private EnvironmentManager environmentManager;
-
-
-    // =========================================================
     // BUILDINGS
     // =========================================================
 
     [Header("Buildings")]
 
-    [Tooltip(
-        "BuildingGenerator responsible for creating houses, " +
-        "temples and random buildings."
-    )]
     [SerializeField]
     private BuildingGenerator buildingGenerator;
+
+
+    // =========================================================
+    // WATER
+    // =========================================================
+
+    [Header("Water")]
+
+    [SerializeField]
+    private WaterManager waterManager;
 
 
     // =========================================================
@@ -117,12 +93,37 @@ public class DemoChat : MonoBehaviour
     [Header("AI Confidence")]
 
     [SerializeField]
-    private float highConfidenceThreshold =
-        0.80f;
+    private float highConfidenceThreshold = 0.80f;
 
     [SerializeField]
-    private float mediumConfidenceThreshold =
-        0.50f;
+    private float mediumConfidenceThreshold = 0.50f;
+
+
+    // =========================================================
+    // CONVERSATION
+    // =========================================================
+
+    [Header("Conversation")]
+
+    [SerializeField]
+    private bool useConversationHistory = true;
+
+    [SerializeField]
+    [Range(1, 10)]
+    private int maximumConversationTurns = 6;
+
+
+    // =========================================================
+    // LLM ROLE
+    // =========================================================
+
+    [Header("LLM Role")]
+
+    [SerializeField]
+    private bool allowDesignAdvice = true;
+
+    [SerializeField]
+    private bool allowClarification = true;
 
 
     // =========================================================
@@ -130,11 +131,6 @@ public class DemoChat : MonoBehaviour
     // =========================================================
 
     private bool isGenerating = false;
-
-
-    // =========================================================
-    // PENDING CONFIRMATION
-    // =========================================================
 
     private bool hasPendingConfirmation = false;
 
@@ -144,14 +140,16 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // YIELD TRACKING
+    // CONVERSATION HISTORY
     // =========================================================
 
-    private readonly Dictionary<string, int>
-        harvestedYield =
-            new Dictionary<string, int>(
-                StringComparer.OrdinalIgnoreCase
-            );
+    private List<ConversationTurn> conversationHistory =
+        new List<ConversationTurn>();
+
+
+    private LandscapeCommand lastAdviceCommand = null;
+
+    private string lastAdviceText = "";
 
 
     // =========================================================
@@ -160,10 +158,7 @@ public class DemoChat : MonoBehaviour
 
     public bool IsGenerating
     {
-        get
-        {
-            return isGenerating;
-        }
+        get { return isGenerating; }
     }
 
 
@@ -183,8 +178,7 @@ public class DemoChat : MonoBehaviour
         if (outputText != null)
         {
             outputText.text =
-                "Describe the terrain, trees, crops, buildings, " +
-                "or environment you want.";
+                "Describe the terrain, mountains, trees, buildings, or water you want.";
         }
     }
 
@@ -221,19 +215,13 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // PUBLIC PROMPT
+    // SEND PROMPT
     // =========================================================
 
-    public void SendPrompt(
-        string userPrompt
-    )
+    public void SendPrompt(string userPrompt)
     {
         if (string.IsNullOrWhiteSpace(userPrompt))
         {
-            Debug.LogWarning(
-                "[DemoChat] Empty prompt ignored."
-            );
-
             return;
         }
 
@@ -242,7 +230,7 @@ public class DemoChat : MonoBehaviour
 
 
         // -----------------------------------------------------
-        // CONFIRMATION RESPONSE
+        // CONFIRMATION
         // -----------------------------------------------------
 
         if (hasPendingConfirmation)
@@ -250,14 +238,12 @@ public class DemoChat : MonoBehaviour
             if (IsConfirmationYes(userPrompt))
             {
                 ConfirmPendingCommand();
-
                 return;
             }
 
             if (IsConfirmationNo(userPrompt))
             {
                 CancelPendingCommand();
-
                 return;
             }
 
@@ -266,14 +252,31 @@ public class DemoChat : MonoBehaviour
 
 
         // -----------------------------------------------------
-        // TRANSCRIPT VALIDATION
+        // QUICK "DO IT" / "DO THAT"
+        // -----------------------------------------------------
+
+        // If the previous AI response contained an actionable
+        // recommendation, allow the user to directly execute it.
+
+        if (
+            HasActionableAdvice() &&
+            IsExecutePreviousAdviceRequest(userPrompt)
+        )
+        {
+            ExecuteLastAdvice();
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // TRANSCRIPT
         // -----------------------------------------------------
 
         if (!IsUsableTranscript(userPrompt))
         {
             SetOutput(
                 "I could not clearly understand the request. " +
-                "Please try saying it again."
+                "Please try again."
             );
 
             return;
@@ -297,22 +300,34 @@ public class DemoChat : MonoBehaviour
     // ASYNC ASK
     // =========================================================
 
-    public async Task Ask(
-        string userPrompt
-    )
+    public async Task Ask(string userPrompt)
     {
         if (string.IsNullOrWhiteSpace(userPrompt))
         {
-            Debug.LogWarning(
-                "[DemoChat] Ask() received empty prompt."
-            );
-
             return;
         }
 
         userPrompt =
             userPrompt.Trim();
 
+
+        // -----------------------------------------------------
+        // DIRECT EXECUTION OF LAST ADVICE
+        // -----------------------------------------------------
+
+        if (
+            HasActionableAdvice() &&
+            IsExecutePreviousAdviceRequest(userPrompt)
+        )
+        {
+            ExecuteLastAdvice();
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // TRANSCRIPT
+        // -----------------------------------------------------
 
         if (!IsUsableTranscript(userPrompt))
         {
@@ -323,21 +338,17 @@ public class DemoChat : MonoBehaviour
             return;
         }
 
-
         while (isGenerating)
         {
             await Task.Yield();
         }
 
-
         SpatialContext spatialContext =
             CaptureSpatialContext();
-
 
         TaskCompletionSource<bool>
             completionSource =
             new TaskCompletionSource<bool>();
-
 
         StartCoroutine(
             SendToOllama(
@@ -347,7 +358,6 @@ public class DemoChat : MonoBehaviour
             )
         );
 
-
         await completionSource.Task;
     }
 
@@ -356,9 +366,7 @@ public class DemoChat : MonoBehaviour
     // TRANSCRIPT VALIDATION
     // =========================================================
 
-    private bool IsUsableTranscript(
-        string transcript
-    )
+    private bool IsUsableTranscript(string transcript)
     {
         if (string.IsNullOrWhiteSpace(transcript))
         {
@@ -380,11 +388,7 @@ public class DemoChat : MonoBehaviour
                 ""
             );
 
-        if (
-            string.IsNullOrWhiteSpace(
-                withoutPunctuation
-            )
-        )
+        if (string.IsNullOrWhiteSpace(withoutPunctuation))
         {
             return false;
         }
@@ -408,9 +412,7 @@ public class DemoChat : MonoBehaviour
     // CONFIRMATION YES
     // =========================================================
 
-    private bool IsConfirmationYes(
-        string text
-    )
+    private bool IsConfirmationYes(string text)
     {
         string normalized =
             text.Trim().ToLowerInvariant();
@@ -424,6 +426,8 @@ public class DemoChat : MonoBehaviour
             normalized == "ok" ||
             normalized == "confirm" ||
             normalized == "do it" ||
+            normalized == "do that" ||
+            normalized == "do it too" ||
             normalized == "go ahead" ||
             normalized == "that's right" ||
             normalized == "correct";
@@ -434,9 +438,7 @@ public class DemoChat : MonoBehaviour
     // CONFIRMATION NO
     // =========================================================
 
-    private bool IsConfirmationNo(
-        string text
-    )
+    private bool IsConfirmationNo(string text)
     {
         string normalized =
             text.Trim().ToLowerInvariant();
@@ -452,7 +454,212 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // CONFIRM PENDING COMMAND
+    // PREVIOUS ADVICE EXECUTION REQUEST
+    // =========================================================
+
+    private bool IsExecutePreviousAdviceRequest(
+        string text
+    )
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        string normalized =
+            text.Trim().ToLowerInvariant();
+
+        return
+            normalized == "do it" ||
+            normalized == "do that" ||
+            normalized == "do it too" ||
+            normalized == "do that too" ||
+            normalized == "go ahead" ||
+            normalized == "apply that" ||
+            normalized == "apply it" ||
+            normalized == "make it happen" ||
+            normalized == "make that happen" ||
+            normalized == "yes, do it" ||
+            normalized == "yes do it" ||
+            normalized == "yes, do that" ||
+            normalized == "yes do that";
+    }
+
+
+    // =========================================================
+    // HAS ACTIONABLE ADVICE
+    // =========================================================
+
+    private bool HasActionableAdvice()
+    {
+        return
+            lastAdviceCommand != null &&
+            !string.IsNullOrWhiteSpace(
+                lastAdviceCommand.commandType
+            );
+    }
+
+
+    // =========================================================
+    // EXECUTE LAST ADVICE
+    // =========================================================
+
+    private void ExecuteLastAdvice()
+    {
+        if (!HasActionableAdvice())
+        {
+            SetOutput(
+                "I do not have a previous actionable recommendation to apply."
+            );
+
+            return;
+        }
+
+        LandscapeCommand command =
+            CloneCommand(
+                lastAdviceCommand
+            );
+
+        SpatialContext spatialContext =
+            CaptureSpatialContext();
+
+        SetOutput(
+            "Applying my previous recommendation..."
+        );
+
+        bool success =
+            ExecuteValidatedCommand(
+                command,
+                spatialContext
+            );
+
+        if (success)
+        {
+            AddConversationTurn(
+                "Do it.",
+                "Applied the previous recommendation: " +
+                DescribeCommand(command)
+            );
+
+            // Clear the recommendation after execution.
+            lastAdviceCommand = null;
+            lastAdviceText = "";
+        }
+        else
+        {
+            AddConversationTurn(
+                "Do it.",
+                "The previous recommendation could not be executed."
+            );
+        }
+    }
+
+
+    // =========================================================
+    // CLONE COMMAND
+    // =========================================================
+
+    private LandscapeCommand CloneCommand(
+        LandscapeCommand source
+    )
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        LandscapeCommand clone =
+            new LandscapeCommand();
+
+        clone.commandType =
+            source.commandType;
+
+        clone.confidence =
+            source.confidence;
+
+        clone.reason =
+            source.reason;
+
+        clone.assistantMessage =
+            source.assistantMessage;
+
+
+        if (source.terrain != null)
+        {
+            clone.terrain =
+                new TerrainCommand();
+
+            clone.terrain.action =
+                source.terrain.action;
+
+            clone.terrain.count =
+                source.terrain.count;
+
+            clone.terrain.heightChange =
+                source.terrain.heightChange;
+        }
+
+
+        if (source.trees != null)
+        {
+            clone.trees =
+                new TreeCommand();
+
+            clone.trees.action =
+                source.trees.action;
+
+            clone.trees.treeType =
+                source.trees.treeType;
+
+            clone.trees.count =
+                source.trees.count;
+
+            clone.trees.centerX =
+                source.trees.centerX;
+
+            clone.trees.centerZ =
+                source.trees.centerZ;
+
+            clone.trees.radius =
+                source.trees.radius;
+
+            clone.trees.spacing =
+                source.trees.spacing;
+        }
+
+
+        if (source.building != null)
+        {
+            clone.building =
+                new BuildingCommand();
+
+            clone.building.action =
+                source.building.action;
+
+            clone.building.buildingType =
+                source.building.buildingType;
+
+            clone.building.count =
+                source.building.count;
+        }
+
+
+        if (source.water != null)
+        {
+            clone.water =
+                new WaterCommand();
+
+            clone.water.action =
+                source.water.action;
+        }
+
+
+        return clone;
+    }
+
+
+    // =========================================================
+    // CONFIRM
     // =========================================================
 
     private void ConfirmPendingCommand()
@@ -469,28 +676,23 @@ public class DemoChat : MonoBehaviour
             return;
         }
 
-
         LandscapeCommand command =
             pendingCommand;
 
         SpatialContext spatialContext =
             pendingSpatialContext;
 
-
         ClearPendingConfirmation();
-
 
         SetOutput(
             "Confirmed. Executing the request..."
         );
-
 
         bool success =
             ExecuteValidatedCommand(
                 command,
                 spatialContext
             );
-
 
         if (!success)
         {
@@ -502,7 +704,7 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // CANCEL PENDING COMMAND
+    // CANCEL
     // =========================================================
 
     private void CancelPendingCommand()
@@ -516,19 +718,14 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // CLEAR PENDING
+    // CLEAR CONFIRMATION
     // =========================================================
 
     private void ClearPendingConfirmation()
     {
-        hasPendingConfirmation =
-            false;
-
-        pendingCommand =
-            null;
-
-        pendingSpatialContext =
-            null;
+        hasPendingConfirmation = false;
+        pendingCommand = null;
+        pendingSpatialContext = null;
     }
 
 
@@ -542,72 +739,58 @@ public class DemoChat : MonoBehaviour
             new SpatialContext();
 
 
-        if (treePointingDetector == null)
+        // =====================================================
+        // TREE + CURRENT TERRAIN GROUND POSITION
+        // =====================================================
+
+        if (treePointingDetector != null)
         {
-            return context;
-        }
+            TreeSelectable selectedTree =
+                treePointingDetector.GetSelectedTree();
 
-
-        // -----------------------------------------------------
-        // SELECTED TREE
-        // -----------------------------------------------------
-
-        TreeSelectable selectedTree =
-            treePointingDetector.GetSelectedTree();
-
-
-        if (selectedTree != null)
-        {
-            context.hasSelectedTree =
-                true;
-
-            context.selectedTreeIndex =
-                selectedTree.treeIndex;
-
-            context.selectedTreeName =
-                selectedTree.GetTreeName();
-
-
-            TreeTypeInfo typeInfo =
-                selectedTree.GetComponent<TreeTypeInfo>();
-
-
-            if (typeInfo != null)
+            if (selectedTree != null)
             {
-                context.selectedTreeType =
-                    typeInfo.GetTreeType();
+                context.hasSelectedTree = true;
+
+                context.selectedTreeIndex =
+                    selectedTree.treeIndex;
+
+                context.selectedTreeName =
+                    selectedTree.GetTreeName();
+
+                TreeTypeInfo typeInfo =
+                    selectedTree.GetComponent<TreeTypeInfo>();
+
+                if (typeInfo != null)
+                {
+                    context.selectedTreeType =
+                        typeInfo.GetTreeType();
+                }
+                else
+                {
+                    context.selectedTreeType =
+                        "Unknown";
+                }
             }
-            else
-            {
-                context.selectedTreeType =
-                    "Unknown";
-            }
-        }
-        else
-        {
-            context.hasSelectedTree =
-                false;
-        }
 
 
-        // -----------------------------------------------------
-        // GROUND POSITION
-        // -----------------------------------------------------
+            // =================================================
+            // CURRENT POINTED TERRAIN POSITION
+            // =================================================
 
-        Vector3 groundPosition;
+            Vector3 groundPosition;
 
-
-        if (
-            treePointingDetector.TryGetGroundPosition(
-                out groundPosition
+            if (
+                treePointingDetector.TryGetGroundPosition(
+                    out groundPosition
+                )
             )
-        )
-        {
-            context.hasGroundPosition =
-                true;
+            {
+                context.hasGroundPosition = true;
 
-            context.groundPosition =
-                groundPosition;
+                context.groundPosition =
+                    groundPosition;
+            }
         }
 
 
@@ -616,7 +799,7 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // SPATIAL CONTEXT TEXT
+    // SPATIAL TEXT
     // =========================================================
 
     private string BuildSpatialContext(
@@ -625,7 +808,6 @@ public class DemoChat : MonoBehaviour
     {
         StringBuilder builder =
             new StringBuilder();
-
 
         builder.AppendLine(
             "XR SPATIAL CONTEXT:"
@@ -638,9 +820,9 @@ public class DemoChat : MonoBehaviour
         builder.AppendLine();
 
 
-        // -----------------------------------------------------
+        // =====================================================
         // TREE
-        // -----------------------------------------------------
+        // =====================================================
 
         if (context.hasSelectedTree)
         {
@@ -650,7 +832,7 @@ public class DemoChat : MonoBehaviour
             );
 
             builder.AppendLine(
-                "Selected tree index: " +
+                "Selected tree ID: " +
                 context.selectedTreeIndex
             );
 
@@ -667,32 +849,41 @@ public class DemoChat : MonoBehaviour
         }
 
 
-        // -----------------------------------------------------
-        // GROUND
-        // -----------------------------------------------------
+        // =====================================================
+        // CURRENT POINTED TERRAIN POSITION
+        // =====================================================
+
+        builder.AppendLine();
+
+        builder.AppendLine(
+            "CURRENT POINTED TERRAIN POSITION:"
+        );
+
+        builder.AppendLine(
+            "This Unity-provided position can be used as the spatial reference for mountain modification and tree movement."
+        );
 
         if (context.hasGroundPosition)
         {
             Vector3 p =
                 context.groundPosition;
 
-
             builder.AppendLine(
                 "Pointing at terrain: true"
             );
 
             builder.AppendLine(
-                "Ground position X: " +
+                "Current ground position X: " +
                 p.x.ToString("F3")
             );
 
             builder.AppendLine(
-                "Ground position Y: " +
+                "Current ground position Y: " +
                 p.y.ToString("F3")
             );
 
             builder.AppendLine(
-                "Ground position Z: " +
+                "Current ground position Z: " +
                 p.z.ToString("F3")
             );
         }
@@ -704,51 +895,171 @@ public class DemoChat : MonoBehaviour
         }
 
 
-        builder.AppendLine();
-
-
-        builder.AppendLine(
-            "SPATIAL REFERENCE RULES:"
-        );
-
-        builder.AppendLine(
-            "Unity provides the selected tree."
-        );
-
-        builder.AppendLine(
-            "Unity provides the tree ID."
-        );
-
-        builder.AppendLine(
-            "Unity provides the pointed ground position."
-        );
-
-        builder.AppendLine(
-            "Unity controls physical placement."
-        );
+        // =====================================================
+        // SPATIAL RULES
+        // =====================================================
 
         builder.AppendLine();
 
+        builder.AppendLine(
+            "SPATIAL RULES:"
+        );
+
+        builder.AppendLine(
+            "Unity provides selected tree information."
+        );
+
+        builder.AppendLine(
+            "Unity provides the current pointed Terrain ground position."
+        );
+
+        builder.AppendLine(
+            "The current pointed Terrain ground position is the ONLY location reference for mountain modification."
+        );
+
+        builder.AppendLine(
+            "The same current pointed Terrain ground position can be used for tree movement destinations."
+        );
+
+        builder.AppendLine(
+            "This works for BOTH mountains that already existed on the Terrain and mountains generated by Unity."
+        );
+
+        builder.AppendLine(
+            "Mountain IDs are NOT required."
+        );
+
+        builder.AppendLine(
+            "Mountain IDs are NOT used for mountain modification."
+        );
 
         builder.AppendLine(
             "The AI MUST NOT invent tree IDs."
         );
 
         builder.AppendLine(
-            "The AI MUST NOT invent exact target coordinates."
+            "The AI MUST NOT invent movement coordinates."
         );
 
         builder.AppendLine(
-            "For move_tree, use the Unity spatial context."
+            "For 'this tree', use the selected tree."
         );
 
         builder.AppendLine(
-            "Buildings currently use BuildingGenerator's " +
-            "random terrain placement."
+            "For 'this mountain', use the CURRENT pointed Terrain ground position."
         );
 
+        builder.AppendLine(
+            "For 'it', use the currently selected object when the reference is clear."
+        );
+
+        builder.AppendLine(
+            "For 'over there', use the Unity-provided pointed position."
+        );
+
+        builder.AppendLine(
+            "Buildings use BuildingGenerator's random terrain placement."
+        );
+
+        builder.AppendLine(
+            "Water uses WaterManager's own safe placement logic."
+        );
 
         return builder.ToString();
+    }
+
+
+    // =========================================================
+    // CONVERSATION CONTEXT
+    // =========================================================
+
+    private string BuildConversationContext()
+    {
+        if (
+            !useConversationHistory ||
+            conversationHistory == null ||
+            conversationHistory.Count == 0
+        )
+        {
+            return
+                "There is no previous conversation context.";
+        }
+
+        StringBuilder builder =
+            new StringBuilder();
+
+        builder.AppendLine(
+            "RECENT CONVERSATION SUMMARY:"
+        );
+
+        int startIndex =
+            Mathf.Max(
+                0,
+                conversationHistory.Count -
+                maximumConversationTurns
+            );
+
+        for (
+            int i = startIndex;
+            i < conversationHistory.Count;
+            i++
+        )
+        {
+            ConversationTurn turn =
+                conversationHistory[i];
+
+            builder.AppendLine(
+                "User: " +
+                turn.userMessage
+            );
+
+            builder.AppendLine(
+                "Assistant: " +
+                turn.assistantResult
+            );
+
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
+    }
+
+
+    // =========================================================
+    // ADD CONVERSATION TURN
+    // =========================================================
+
+    private void AddConversationTurn(
+        string userMessage,
+        string assistantResult
+    )
+    {
+        if (!useConversationHistory)
+        {
+            return;
+        }
+
+        if (conversationHistory == null)
+        {
+            conversationHistory =
+                new List<ConversationTurn>();
+        }
+
+        conversationHistory.Add(
+            new ConversationTurn
+            {
+                userMessage = userMessage,
+                assistantResult = assistantResult
+            }
+        );
+
+        while (
+            conversationHistory.Count >
+            maximumConversationTurns
+        )
+        {
+            conversationHistory.RemoveAt(0);
+        }
     }
 
 
@@ -759,8 +1070,7 @@ public class DemoChat : MonoBehaviour
     private IEnumerator SendToOllama(
         string userPrompt,
         SpatialContext spatialContext,
-        TaskCompletionSource<bool>
-            completionSource
+        TaskCompletionSource<bool> completionSource
     )
     {
         if (isGenerating)
@@ -771,15 +1081,9 @@ public class DemoChat : MonoBehaviour
             }
         }
 
+        isGenerating = true;
 
-        isGenerating =
-            true;
-
-
-        SetButtonInteractable(
-            false
-        );
-
+        SetButtonInteractable(false);
 
         SetOutput(
             "AI is thinking..."
@@ -789,23 +1093,108 @@ public class DemoChat : MonoBehaviour
         string systemPrompt =
             BuildSystemPrompt();
 
-
         string spatialText =
             BuildSpatialContext(
                 spatialContext
             );
 
+        string conversationText =
+            BuildConversationContext();
+
+
+        // =====================================================
+        // CURRENT USER MESSAGE
+        // =====================================================
 
         string userMessage =
             "USER REQUEST:\n" +
             userPrompt +
             "\n\n" +
-            spatialText;
+            spatialText +
+            "\n\n" +
+            conversationText;
 
+
+        // =====================================================
+        // BUILD ACTUAL OLLAMA CONVERSATION
+        // =====================================================
+
+        List<OllamaMessage> messages =
+            new List<OllamaMessage>();
+
+
+        // SYSTEM
+
+        messages.Add(
+            new OllamaMessage
+            {
+                role = "system",
+                content = systemPrompt
+            }
+        );
+
+
+        // PREVIOUS CONVERSATION
+
+        if (
+            useConversationHistory &&
+            conversationHistory != null
+        )
+        {
+            int startIndex =
+                Mathf.Max(
+                    0,
+                    conversationHistory.Count -
+                    maximumConversationTurns
+                );
+
+            for (
+                int i = startIndex;
+                i < conversationHistory.Count;
+                i++
+            )
+            {
+                ConversationTurn turn =
+                    conversationHistory[i];
+
+                messages.Add(
+                    new OllamaMessage
+                    {
+                        role = "user",
+                        content =
+                            turn.userMessage
+                    }
+                );
+
+                messages.Add(
+                    new OllamaMessage
+                    {
+                        role = "assistant",
+                        content =
+                            turn.assistantResult
+                    }
+                );
+            }
+        }
+
+
+        // CURRENT REQUEST
+
+        messages.Add(
+            new OllamaMessage
+            {
+                role = "user",
+                content = userMessage
+            }
+        );
+
+
+        // =====================================================
+        // REQUEST
+        // =====================================================
 
         OllamaRequest request =
             new OllamaRequest();
-
 
         request.model =
             demoModel;
@@ -813,34 +1202,15 @@ public class DemoChat : MonoBehaviour
         request.stream =
             false;
 
-
         request.messages =
-            new OllamaMessage[]
-            {
-                new OllamaMessage
-                {
-                    role = "system",
-                    content = systemPrompt
-                },
-
-                new OllamaMessage
-                {
-                    role = "user",
-                    content = userMessage
-                }
-            };
+            messages.ToArray();
 
 
         string json =
-            JsonUtility.ToJson(
-                request
-            );
-
+            JsonUtility.ToJson(request);
 
         byte[] body =
-            Encoding.UTF8.GetBytes(
-                json
-            );
+            Encoding.UTF8.GetBytes(json);
 
 
         using (
@@ -852,20 +1222,15 @@ public class DemoChat : MonoBehaviour
         )
         {
             webRequest.uploadHandler =
-                new UploadHandlerRaw(
-                    body
-                );
-
+                new UploadHandlerRaw(body);
 
             webRequest.downloadHandler =
                 new DownloadHandlerBuffer();
-
 
             webRequest.SetRequestHeader(
                 "Content-Type",
                 "application/json"
             );
-
 
             yield return webRequest.SendWebRequest();
 
@@ -884,12 +1249,10 @@ public class DemoChat : MonoBehaviour
                     webRequest.error
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -898,10 +1261,8 @@ public class DemoChat : MonoBehaviour
             string response =
                 webRequest.downloadHandler.text;
 
-
             OllamaResponse ollamaResponse =
                 null;
-
 
             try
             {
@@ -912,21 +1273,16 @@ public class DemoChat : MonoBehaviour
             }
             catch (Exception exception)
             {
-                Debug.LogError(
-                    exception
-                );
-
+                Debug.LogError(exception);
 
                 SetOutput(
                     "Invalid response from Ollama."
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -941,12 +1297,10 @@ public class DemoChat : MonoBehaviour
                     "Ollama returned no message."
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -954,7 +1308,6 @@ public class DemoChat : MonoBehaviour
 
             string llmContent =
                 ollamaResponse.message.content;
-
 
             Debug.Log(
                 "[DemoChat] LLM:\n" +
@@ -967,10 +1320,7 @@ public class DemoChat : MonoBehaviour
             // -------------------------------------------------
 
             string commandJson =
-                ExtractJson(
-                    llmContent
-                );
-
+                ExtractJson(llmContent);
 
             if (string.IsNullOrEmpty(commandJson))
             {
@@ -978,12 +1328,10 @@ public class DemoChat : MonoBehaviour
                     "I could not understand the AI response."
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -991,7 +1339,6 @@ public class DemoChat : MonoBehaviour
 
             LandscapeCommand command =
                 null;
-
 
             try
             {
@@ -1002,21 +1349,16 @@ public class DemoChat : MonoBehaviour
             }
             catch (Exception exception)
             {
-                Debug.LogError(
-                    exception
-                );
-
+                Debug.LogError(exception);
 
                 SetOutput(
                     "The AI command could not be parsed."
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -1028,12 +1370,10 @@ public class DemoChat : MonoBehaviour
                     "The AI returned an empty command."
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -1045,7 +1385,6 @@ public class DemoChat : MonoBehaviour
 
             string commandType =
                 command.commandType;
-
 
             if (
                 string.IsNullOrWhiteSpace(
@@ -1059,32 +1398,24 @@ public class DemoChat : MonoBehaviour
                     );
             }
 
-
             commandType =
                 commandType
                     .Trim()
                     .ToLowerInvariant();
 
-
             command.commandType =
                 commandType;
 
-
-            // -------------------------------------------------
-            // DEBUG
-            // -------------------------------------------------
 
             Debug.Log(
                 "[DemoChat] Command type = " +
                 commandType
             );
 
-
             Debug.Log(
                 "[DemoChat] Confidence = " +
                 command.confidence.ToString("F2")
             );
-
 
             Debug.Log(
                 "[DemoChat] Reason = " +
@@ -1098,7 +1429,6 @@ public class DemoChat : MonoBehaviour
 
             string validationError;
 
-
             if (
                 !ValidateCommand(
                     command,
@@ -1111,12 +1441,41 @@ public class DemoChat : MonoBehaviour
                     validationError
                 );
 
-
                 FinishRequest(
                     completionSource,
                     false
                 );
 
+                yield break;
+            }
+
+
+            // -------------------------------------------------
+            // ADVICE
+            // -------------------------------------------------
+
+            if (commandType == "advice")
+            {
+                HandleAdvice(
+                    command
+                );
+
+                string adviceResult =
+                    string.IsNullOrWhiteSpace(
+                        command.assistantMessage
+                    )
+                        ? command.reason
+                        : command.assistantMessage;
+
+                AddConversationTurn(
+                    userPrompt,
+                    adviceResult
+                );
+
+                FinishRequest(
+                    completionSource,
+                    true
+                );
 
                 yield break;
             }
@@ -1132,16 +1491,17 @@ public class DemoChat : MonoBehaviour
                 commandType == "ambiguous"
             )
             {
-                HandleUnknownCommand(
-                    command
-                );
+                HandleUnknownCommand(command);
 
+                AddConversationTurn(
+                    userPrompt,
+                    command.reason
+                );
 
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -1157,33 +1517,26 @@ public class DemoChat : MonoBehaviour
                 );
 
 
-            // -------------------------------------------------
-            // LOW CONFIDENCE
-            // -------------------------------------------------
-
             if (
                 confidence <
                 mediumConfidenceThreshold
             )
             {
-                HandleLowConfidence(
-                    command
-                );
+                HandleLowConfidence(command);
 
+                AddConversationTurn(
+                    userPrompt,
+                    command.reason
+                );
 
                 FinishRequest(
                     completionSource,
                     false
                 );
 
-
                 yield break;
             }
 
-
-            // -------------------------------------------------
-            // MEDIUM CONFIDENCE
-            // -------------------------------------------------
 
             if (
                 confidence <
@@ -1195,12 +1548,15 @@ public class DemoChat : MonoBehaviour
                     spatialContext
                 );
 
+                AddConversationTurn(
+                    userPrompt,
+                    DescribeCommand(command)
+                );
 
                 FinishRequest(
                     completionSource,
                     false
                 );
-
 
                 yield break;
             }
@@ -1216,6 +1572,12 @@ public class DemoChat : MonoBehaviour
                     spatialContext
                 );
 
+            AddConversationTurn(
+                userPrompt,
+                success
+                    ? DescribeCommand(command)
+                    : "The requested action could not be executed."
+            );
 
             FinishRequest(
                 completionSource,
@@ -1237,7 +1599,6 @@ public class DemoChat : MonoBehaviour
     {
         error = "";
 
-
         if (command == null)
         {
             error =
@@ -1245,7 +1606,6 @@ public class DemoChat : MonoBehaviour
 
             return false;
         }
-
 
         if (
             string.IsNullOrWhiteSpace(
@@ -1259,16 +1619,13 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         string commandType =
             command.commandType
                 .Trim()
                 .ToLowerInvariant();
 
 
-        // =====================================================
         // UNKNOWN
-        // =====================================================
 
         if (
             commandType == "unknown" ||
@@ -1276,13 +1633,108 @@ public class DemoChat : MonoBehaviour
             commandType == "ambiguous"
         )
         {
+            if (!allowClarification)
+            {
+                error =
+                    "Clarification is currently disabled.";
+
+                return false;
+            }
+
             return true;
         }
 
 
-        // =====================================================
+        // ADVICE
+
+        if (commandType == "advice")
+        {
+            if (!allowDesignAdvice)
+            {
+                error =
+                    "Design advice is currently disabled.";
+
+                return false;
+            }
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    command.assistantMessage
+                ) &&
+                string.IsNullOrWhiteSpace(
+                    command.reason
+                )
+            )
+            {
+                error =
+                    "The AI did not provide an explanation.";
+
+                return false;
+            }
+
+            // suggestedCommand is optional.
+            // Advice can exist without an executable action.
+
+            if (
+                command.suggestedCommand != null
+            )
+            {
+                string suggestedType =
+                    command.suggestedCommand.commandType;
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        suggestedType
+                    )
+                )
+                {
+                    error =
+                        "The AI provided an invalid recommendation.";
+
+                    return false;
+                }
+
+                suggestedType =
+                    suggestedType
+                        .Trim()
+                        .ToLowerInvariant();
+
+                if (
+                    suggestedType == "advice" ||
+                    suggestedType == "unknown" ||
+                    suggestedType == "unclear" ||
+                    suggestedType == "ambiguous"
+                )
+                {
+                    error =
+                        "The AI recommendation is not an executable Unity action.";
+
+                    return false;
+                }
+
+                string suggestedError;
+
+                if (
+                    !ValidateCommand(
+                        command.suggestedCommand,
+                        spatialContext,
+                        out suggestedError
+                    )
+                )
+                {
+                    error =
+                        "The AI recommendation could not be validated.\n\n" +
+                        suggestedError;
+
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+
         // TERRAIN
-        // =====================================================
 
         if (
             commandType == "terrain" ||
@@ -1293,12 +1745,11 @@ public class DemoChat : MonoBehaviour
             if (command.terrain == null)
             {
                 error =
-                    "The AI identified a terrain modification " +
+                    "The AI identified a terrain action " +
                     "but did not provide terrain settings.";
 
                 return false;
             }
-
 
             if (
                 string.IsNullOrWhiteSpace(
@@ -1312,14 +1763,11 @@ public class DemoChat : MonoBehaviour
                 return false;
             }
 
-
             return true;
         }
 
 
-        // =====================================================
         // TREES
-        // =====================================================
 
         if (
             commandType == "trees" ||
@@ -1338,7 +1786,6 @@ public class DemoChat : MonoBehaviour
                 return false;
             }
 
-
             if (
                 string.IsNullOrWhiteSpace(
                     command.trees.action
@@ -1351,87 +1798,44 @@ public class DemoChat : MonoBehaviour
                 return false;
             }
 
-
             return true;
         }
 
 
-        // =====================================================
-        // CROPS
-        // =====================================================
+        // WATER
 
         if (
-            commandType == "crops" ||
-            commandType == "crop" ||
-            commandType == "farming"
+            commandType == "water" ||
+            commandType == "river" ||
+            commandType == "lake"
         )
         {
-            if (command.crops == null)
+            if (command.water == null)
             {
                 error =
-                    "The AI identified a crop action " +
-                    "but did not provide crop settings.";
+                    "The AI identified a water action " +
+                    "but did not provide water settings.";
 
                 return false;
             }
 
-
             if (
                 string.IsNullOrWhiteSpace(
-                    command.crops.action
+                    command.water.action
                 )
             )
             {
                 error =
-                    "The AI did not specify the crop action.";
+                    "The AI did not specify the water action.";
 
                 return false;
             }
-
 
             return true;
         }
 
 
-        // =====================================================
-        // ENVIRONMENT
-        // =====================================================
-
-        if (
-            commandType == "environment" ||
-            commandType == "env"
-        )
-        {
-            if (command.environment == null)
-            {
-                error =
-                    "The AI identified an environment action " +
-                    "but did not provide environment settings.";
-
-                return false;
-            }
-
-
-            if (
-                string.IsNullOrWhiteSpace(
-                    command.environment.action
-                )
-            )
-            {
-                error =
-                    "The AI did not specify the environment action.";
-
-                return false;
-            }
-
-
-            return true;
-        }
-
-
-        // =====================================================
         // BUILDINGS
-        // =====================================================
 
         if (
             commandType == "building" ||
@@ -1448,7 +1852,6 @@ public class DemoChat : MonoBehaviour
                 return false;
             }
 
-
             if (
                 string.IsNullOrWhiteSpace(
                     command.building.action
@@ -1461,7 +1864,6 @@ public class DemoChat : MonoBehaviour
                 return false;
             }
 
-
             return true;
         }
 
@@ -1470,13 +1872,69 @@ public class DemoChat : MonoBehaviour
             "I could not determine which system " +
             "you want to control.";
 
-
         return false;
     }
 
 
     // =========================================================
-    // UNKNOWN COMMAND
+    // ADVICE
+    // =========================================================
+
+    private void HandleAdvice(
+        LandscapeCommand command
+    )
+    {
+        string message =
+            command.assistantMessage;
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            message =
+                command.reason;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            message =
+                "I can help you think about the design, but I need more information about what you want to achieve.";
+        }
+
+
+        // -----------------------------------------------------
+        // REMEMBER ACTIONABLE RECOMMENDATION
+        // -----------------------------------------------------
+
+        if (
+            command.suggestedCommand != null
+        )
+        {
+            lastAdviceCommand =
+                CloneCommand(
+                    command.suggestedCommand
+                );
+
+            lastAdviceText =
+                message;
+
+            message +=
+                "\n\n" +
+                "If you want me to apply this recommendation, say \"do it\".";
+        }
+        else
+        {
+            lastAdviceCommand = null;
+            lastAdviceText = "";
+        }
+
+
+        SetOutput(
+            message
+        );
+    }
+
+
+    // =========================================================
+    // UNKNOWN
     // =========================================================
 
     private void HandleUnknownCommand(
@@ -1486,20 +1944,17 @@ public class DemoChat : MonoBehaviour
         string reason =
             command.reason;
 
-
         if (string.IsNullOrWhiteSpace(reason))
         {
             reason =
                 "The request is not specific enough.";
         }
 
-
         SetOutput(
             "I am not confident enough to act on that request.\n\n" +
             reason +
             "\n\n" +
-            "Please tell me more specifically what you want " +
-            "to change."
+            "Please tell me more specifically what you want."
         );
     }
 
@@ -1515,13 +1970,11 @@ public class DemoChat : MonoBehaviour
         string reason =
             command.reason;
 
-
         if (string.IsNullOrWhiteSpace(reason))
         {
             reason =
                 "I am not confident that I understood the request.";
         }
-
 
         SetOutput(
             "I don't want to make the wrong change.\n\n" +
@@ -1541,23 +1994,15 @@ public class DemoChat : MonoBehaviour
         SpatialContext spatialContext
     )
     {
-        hasPendingConfirmation =
-            true;
+        hasPendingConfirmation = true;
 
-
-        pendingCommand =
-            command;
-
+        pendingCommand = command;
 
         pendingSpatialContext =
             spatialContext;
 
-
         string actionDescription =
-            DescribeCommand(
-                command
-            );
-
+            DescribeCommand(command);
 
         SetOutput(
             "I think you want to:\n\n" +
@@ -1573,7 +2018,7 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // COMMAND DESCRIPTION
+    // DESCRIBE COMMAND
     // =========================================================
 
     private string DescribeCommand(
@@ -1585,16 +2030,22 @@ public class DemoChat : MonoBehaviour
             return "perform the requested action";
         }
 
-
         string type =
             command.commandType
                 .Trim()
                 .ToLowerInvariant();
 
 
-        // =====================================================
+        // ADVICE
+
+        if (type == "advice")
+        {
+            return
+                "provide design advice";
+        }
+
+
         // TERRAIN
-        // =====================================================
 
         if (
             type == "terrain" ||
@@ -1607,12 +2058,10 @@ public class DemoChat : MonoBehaviour
                 return "modify the existing terrain";
             }
 
-
             string action =
                 command.terrain.action
                     .Trim()
                     .ToLowerInvariant();
-
 
             int count =
                 Mathf.Max(
@@ -1636,26 +2085,37 @@ public class DemoChat : MonoBehaviour
 
 
             if (
-                action == "hill" ||
-                action == "hills" ||
-                action == "create_hill" ||
-                action == "create_hills"
+                action == "modify_mountain" ||
+                action == "modify_selected_mountain" ||
+                action == "mountain_modify"
             )
             {
-                return
-                    "create " +
-                    count +
-                    " hill(s) on the existing terrain";
-            }
+                if (
+                    command.terrain.heightChange >
+                    0.01f
+                )
+                {
+                    return
+                        "make the pointed mountain taller by approximately " +
+                        command.terrain.heightChange.ToString("F1") +
+                        " metres";
+                }
 
+                if (
+                    command.terrain.heightChange <
+                    -0.01f
+                )
+                {
+                    return
+                        "make the pointed mountain shorter by approximately " +
+                        Mathf.Abs(
+                            command.terrain.heightChange
+                        ).ToString("F1") +
+                        " metres";
+                }
 
-            if (
-                action == "valley" ||
-                action == "create_valley"
-            )
-            {
                 return
-                    "create a valley on the existing terrain";
+                    "modify the pointed mountain";
             }
 
 
@@ -1674,9 +2134,7 @@ public class DemoChat : MonoBehaviour
         }
 
 
-        // =====================================================
         // TREES
-        // =====================================================
 
         if (
             type == "trees" ||
@@ -1690,7 +2148,6 @@ public class DemoChat : MonoBehaviour
             {
                 return "perform a tree operation";
             }
-
 
             string action =
                 command.trees.action
@@ -1710,7 +2167,6 @@ public class DemoChat : MonoBehaviour
                         pendingSpatialContext.selectedTreeName +
                         " to the pointed location";
                 }
-
 
                 return "move the selected tree";
             }
@@ -1741,7 +2197,8 @@ public class DemoChat : MonoBehaviour
                 action == "remove_trees"
             )
             {
-                return "remove trees from the selected area";
+                return
+                    "remove trees from the selected area";
             }
 
 
@@ -1750,7 +2207,8 @@ public class DemoChat : MonoBehaviour
                 action == "clear_trees"
             )
             {
-                return "remove all trees";
+                return
+                    "remove all trees";
             }
 
 
@@ -1760,257 +2218,64 @@ public class DemoChat : MonoBehaviour
         }
 
 
-        // =====================================================
-        // CROPS
-        // =====================================================
+        // WATER
 
         if (
-            type == "crops" ||
-            type == "crop" ||
-            type == "farming"
+            type == "water" ||
+            type == "river" ||
+            type == "lake"
         )
         {
-            if (command.crops == null)
+            if (command.water == null)
             {
-                return "perform a crop operation";
+                return "perform a water operation";
             }
-
 
             string action =
-                command.crops.action
-                    .Trim()
-                    .ToLowerInvariant();
-
-
-            string crop =
-                NormalizeName(
-                    command.crops.cropType
-                );
-
-
-            if (
-                action == "plant" ||
-                action == "plant_crop" ||
-                action == "plant_crops" ||
-                action == "sow"
-            )
-            {
-                return
-                    "plant " +
-                    Mathf.Max(
-                        command.crops.count,
-                        1
-                    ) +
-                    " " +
-                    crop +
-                    " crop(s)";
-            }
-
-
-            if (
-                action == "grow" ||
-                action == "grow_crop"
-            )
-            {
-                return
-                    "grow the " +
-                    crop +
-                    " crops";
-            }
-
-
-            if (
-                action == "grow_all" ||
-                action == "grow_all_crops" ||
-                action == "mature_all"
-            )
-            {
-                return
-                    "grow the " +
-                    crop +
-                    " crops to maturity";
-            }
-
-
-            if (
-                action == "harvest" ||
-                action == "harvest_crop" ||
-                action == "harvest_crops"
-            )
-            {
-                return
-                    "harvest the " +
-                    crop +
-                    " crops";
-            }
-
-
-            if (
-                action == "get_yield" ||
-                action == "yield" ||
-                action == "crop_yield"
-            )
-            {
-                return
-                    "report the yield of the " +
-                    crop +
-                    " crops";
-            }
-
-
-            if (
-                action == "crop_info" ||
-                action == "get_crop_info" ||
-                action == "status"
-            )
-            {
-                return
-                    "show information about the " +
-                    crop +
-                    " crops";
-            }
-
-
-            return
-                "perform crop action: " +
-                action;
-        }
-
-
-        // =====================================================
-        // ENVIRONMENT
-        // =====================================================
-
-        if (
-            type == "environment" ||
-            type == "env"
-        )
-        {
-            if (command.environment == null)
-            {
-                return "modify the environment";
-            }
-
-
-            string action =
-                command.environment.action
+                command.water.action
                     .Trim()
                     .ToLowerInvariant();
 
 
             if (
-                action == "greener" ||
-                action == "more_green" ||
-                action == "make_green" ||
-                action == "increase_green"
+                action == "create_river" ||
+                action == "river"
             )
             {
-                return "make the environment greener";
+                return
+                    "create a river at a random safe nearby location";
             }
 
 
             if (
-                action == "less_green" ||
-                action == "reduce_green" ||
-                action == "less_greenery"
+                action == "create_lake" ||
+                action == "lake"
             )
             {
-                return "make the environment less green";
+                return
+                    "create a lake at a random safe nearby location";
             }
 
 
             if (
-                action == "brighter" ||
-                action == "increase_brightness" ||
-                action == "more_light"
+                action == "delete" ||
+                action == "delete_water" ||
+                action == "remove_water" ||
+                action == "clear_water"
             )
             {
-                return "make the environment brighter";
-            }
-
-
-            if (
-                action == "darker" ||
-                action == "decrease_brightness" ||
-                action == "less_light"
-            )
-            {
-                return "make the environment darker";
-            }
-
-
-            if (
-                action == "warmer" ||
-                action == "warm"
-            )
-            {
-                return "make the environment warmer";
-            }
-
-
-            if (
-                action == "cooler" ||
-                action == "cool"
-            )
-            {
-                return "make the environment cooler";
-            }
-
-
-            if (
-                action == "stronger_shadows" ||
-                action == "more_shadows"
-            )
-            {
-                return "make the shadows stronger";
-            }
-
-
-            if (
-                action == "softer_shadows" ||
-                action == "less_shadows"
-            )
-            {
-                return "make the shadows softer";
-            }
-
-
-            if (
-                action == "add_fog" ||
-                action == "fog"
-            )
-            {
-                return "add fog to the environment";
-            }
-
-
-            if (
-                action == "remove_fog" ||
-                action == "no_fog"
-            )
-            {
-                return "remove the fog";
-            }
-
-
-            if (
-                action == "reset" ||
-                action == "reset_environment"
-            )
-            {
-                return "reset the environment";
+                return
+                    "remove the generated water and restore the terrain";
             }
 
 
             return
-                "perform environment action: " +
+                "perform water action: " +
                 action;
         }
 
 
-        // =====================================================
         // BUILDINGS
-        // =====================================================
 
         if (
             type == "building" ||
@@ -2023,12 +2288,10 @@ public class DemoChat : MonoBehaviour
                 return "perform a building operation";
             }
 
-
             string action =
                 command.building.action
                     .Trim()
                     .ToLowerInvariant();
-
 
             int count =
                 Mathf.Max(
@@ -2074,7 +2337,7 @@ public class DemoChat : MonoBehaviour
                 return
                     "create " +
                     count +
-                    " random building(s) on the existing terrain";
+                    " random building(s)";
             }
 
 
@@ -2100,7 +2363,7 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // EXECUTE VALIDATED COMMAND
+    // EXECUTE COMMAND
     // =========================================================
 
     private bool ExecuteValidatedCommand(
@@ -2110,13 +2373,8 @@ public class DemoChat : MonoBehaviour
     {
         if (command == null)
         {
-            SetOutput(
-                "No command was available to execute."
-            );
-
             return false;
         }
-
 
         string commandType =
             command.commandType
@@ -2124,9 +2382,12 @@ public class DemoChat : MonoBehaviour
                 .ToLowerInvariant();
 
 
-        // =====================================================
-        // TERRAIN
-        // =====================================================
+        if (commandType == "advice")
+        {
+            HandleAdvice(command);
+            return true;
+        }
+
 
         if (
             commandType == "terrain" ||
@@ -2135,14 +2396,11 @@ public class DemoChat : MonoBehaviour
         )
         {
             return ProcessTerrainCommand(
-                command
+                command,
+                spatialContext
             );
         }
 
-
-        // =====================================================
-        // TREES
-        // =====================================================
 
         if (
             commandType == "trees" ||
@@ -2159,50 +2417,25 @@ public class DemoChat : MonoBehaviour
         }
 
 
-        // =====================================================
-        // CROPS
-        // =====================================================
-
-        if (
-            commandType == "crops" ||
-            commandType == "crop" ||
-            commandType == "farming"
-        )
-        {
-            return ProcessCropCommand(
-                command
-            );
-        }
-
-
-        // =====================================================
-        // ENVIRONMENT
-        // =====================================================
-
-        if (
-            commandType == "environment" ||
-            commandType == "env"
-        )
-        {
-            return ProcessEnvironmentCommand(
-                command
-            );
-        }
-
-
-        // =====================================================
-        // BUILDINGS
-        // =====================================================
-
         if (
             commandType == "building" ||
             commandType == "buildings" ||
             commandType == "building_generation"
         )
         {
-            return ProcessBuildingCommand(
-                command
-            );
+            return ProcessBuildingCommand(command);
+        }
+
+
+        // WATER
+
+        if (
+            commandType == "water" ||
+            commandType == "river" ||
+            commandType == "lake"
+        )
+        {
+            return ProcessWaterCommand(command);
         }
 
 
@@ -2210,17 +2443,17 @@ public class DemoChat : MonoBehaviour
             "I could not determine the requested action."
         );
 
-
         return false;
     }
 
 
     // =========================================================
-    // TERRAIN COMMAND
+    // TERRAIN
     // =========================================================
 
     private bool ProcessTerrainCommand(
-        LandscapeCommand command
+        LandscapeCommand command,
+        SpatialContext spatialContext
     )
     {
         if (terrainGenerator == null)
@@ -2232,52 +2465,30 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         if (command.terrain == null)
         {
-            SetOutput(
-                "The AI returned no terrain settings."
-            );
-
             return false;
         }
-
-
-        TerrainCommand terrain =
-            command.terrain;
-
 
         string action =
-            terrain.action;
+            command.terrain.action
+                .Trim()
+                .ToLowerInvariant();
 
 
-        if (string.IsNullOrWhiteSpace(action))
-        {
-            SetOutput(
-                "The AI did not specify the terrain action."
-            );
-
-            return false;
-        }
-
-
-        action =
-            action.Trim().ToLowerInvariant();
-
+        // -----------------------------------------------------
+        // CREATE MOUNTAINS
+        // -----------------------------------------------------
 
         int count =
             Mathf.Clamp(
-                terrain.count <= 0
+                command.terrain.count <= 0
                     ? 1
-                    : terrain.count,
+                    : command.terrain.count,
                 1,
                 20
             );
 
-
-        // =====================================================
-        // MOUNTAIN
-        // =====================================================
 
         if (
             action == "mountain" ||
@@ -2290,74 +2501,31 @@ public class DemoChat : MonoBehaviour
                 count
             );
 
-
             SetOutput(
                 "Created " +
                 count +
                 " mountain(s) on the existing terrain."
             );
 
-
             return true;
         }
-
-
-        // =====================================================
-        // HILL
-        // =====================================================
-
-        if (
-            action == "hill" ||
-            action == "hills" ||
-            action == "create_hill" ||
-            action == "create_hills"
+        if(
+            action == "mountain_range" 
+           
         )
         {
-            for (
-                int i = 0;
-                i < count;
-                i++
-            )
-            {
-                terrainGenerator.CreateRandomHill();
-            }
-
+            terrainGenerator.CreateRandomMountainRange();
 
             SetOutput(
-                "Created " +
-                count +
-                " hill(s) on the existing terrain."
+                "Created a range of mountain on the existing terrain."
             );
-
 
             return true;
         }
 
-
-        // =====================================================
-        // VALLEY
-        // =====================================================
-
-        if (
-            action == "valley" ||
-            action == "create_valley"
-        )
-        {
-            terrainGenerator.CreateRandomValley();
-
-
-            SetOutput(
-                "Created a valley on the existing terrain."
-            );
-
-
-            return true;
-        }
-
-
-        // =====================================================
+        // -----------------------------------------------------
         // RESET
-        // =====================================================
+        // -----------------------------------------------------
 
         if (
             action == "reset" ||
@@ -2366,12 +2534,69 @@ public class DemoChat : MonoBehaviour
         {
             terrainGenerator.ResetTerrain();
 
-
             SetOutput(
-                "The existing terrain has been restored " +
-                "to its original shape."
+                "The existing terrain has been restored."
             );
 
+            return true;
+        }
+
+
+        // -----------------------------------------------------
+        // MOUNTAIN MODIFICATION — POSITION ONLY
+        // -----------------------------------------------------
+
+        if (
+            action == "modify_mountain" ||
+            action == "modify_selected_mountain" ||
+            action == "mountain_modify"
+        )
+        {
+            if (!spatialContext.hasGroundPosition)
+            {
+                SetOutput(
+                    "Please point at the mountain first."
+                );
+
+                return false;
+            }
+
+            float heightChange =
+                command.terrain.heightChange;
+
+            if (Mathf.Abs(heightChange) < 0.01f)
+            {
+                SetOutput(
+                    "Please say whether you want the pointed mountain taller or shorter."
+                );
+
+                return false;
+            }
+
+            bool success =
+                terrainGenerator.ModifyMountainAtWorldPosition(
+                    spatialContext.groundPosition,
+                    Mathf.Clamp(
+                        heightChange,
+                        -20f,
+                        20f
+                    )
+                );
+
+            if (!success)
+            {
+                SetOutput(
+                    "I could not modify the mountain at the pointed position."
+                );
+
+                return false;
+            }
+
+            SetOutput(
+                heightChange > 0f
+                    ? "The pointed mountain was made taller."
+                    : "The pointed mountain was made shorter."
+            );
 
             return true;
         }
@@ -2381,7 +2606,6 @@ public class DemoChat : MonoBehaviour
             "Unknown terrain action: " +
             action
         );
-
 
         return false;
     }
@@ -2405,42 +2629,21 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         if (command.trees == null)
         {
-            SetOutput(
-                "The AI returned no tree settings."
-            );
-
             return false;
         }
-
 
         TreeCommand tree =
             command.trees;
 
-
         string action =
-            tree.action;
+            tree.action
+                .Trim()
+                .ToLowerInvariant();
 
 
-        if (string.IsNullOrWhiteSpace(action))
-        {
-            SetOutput(
-                "The AI did not specify a tree action."
-            );
-
-            return false;
-        }
-
-
-        action =
-            action.Trim().ToLowerInvariant();
-
-
-        // =====================================================
         // MOVE TREE
-        // =====================================================
 
         if (action == "move_tree")
         {
@@ -2450,9 +2653,7 @@ public class DemoChat : MonoBehaviour
         }
 
 
-        // =====================================================
         // PLANT
-        // =====================================================
 
         if (
             action == "plant_trees" ||
@@ -2467,20 +2668,17 @@ public class DemoChat : MonoBehaviour
                     5000
                 );
 
-
             float radius =
                 Mathf.Max(
                     tree.radius,
                     1f
                 );
 
-
             float spacing =
                 Mathf.Max(
                     tree.spacing,
                     0.5f
                 );
-
 
             string requestedType =
                 NormalizeName(
@@ -2503,13 +2701,11 @@ public class DemoChat : MonoBehaviour
                     spacing
                 );
 
-
                 SetOutput(
                     "Mixed forest planted.\n\n" +
                     "Count: " +
                     count
                 );
-
 
                 return true;
             }
@@ -2520,7 +2716,6 @@ public class DemoChat : MonoBehaviour
                     requestedType
                 );
 
-
             if (prefab == null)
             {
                 SetOutput(
@@ -2528,7 +2723,6 @@ public class DemoChat : MonoBehaviour
                     requestedType +
                     "' was not found in TreeManager."
                 );
-
 
                 return false;
             }
@@ -2543,7 +2737,6 @@ public class DemoChat : MonoBehaviour
                 spacing
             );
 
-
             SetOutput(
                 requestedType +
                 " trees planted.\n\n" +
@@ -2551,14 +2744,11 @@ public class DemoChat : MonoBehaviour
                 count
             );
 
-
             return true;
         }
 
 
-        // =====================================================
         // REMOVE
-        // =====================================================
 
         if (
             action == "remove_trees" ||
@@ -2574,19 +2764,15 @@ public class DemoChat : MonoBehaviour
                 )
             );
 
-
             SetOutput(
                 "Trees removed."
             );
-
 
             return true;
         }
 
 
-        // =====================================================
         // REMOVE ALL
-        // =====================================================
 
         if (
             action == "remove_all_trees" ||
@@ -2595,11 +2781,9 @@ public class DemoChat : MonoBehaviour
         {
             treeManager.RemoveAllTrees();
 
-
             SetOutput(
                 "All trees removed."
             );
-
 
             return true;
         }
@@ -2609,7 +2793,6 @@ public class DemoChat : MonoBehaviour
             "Unknown tree action: " +
             action
         );
-
 
         return false;
     }
@@ -2632,7 +2815,6 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         if (!spatialContext.hasGroundPosition)
         {
             SetOutput(
@@ -2643,13 +2825,11 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         bool success =
             treeManager.MoveTreeToWorldPosition(
                 spatialContext.selectedTreeIndex,
                 spatialContext.groundPosition
             );
-
 
         if (!success)
         {
@@ -2660,271 +2840,11 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         SetOutput(
             "Moved " +
             spatialContext.selectedTreeName +
             " to the pointed location."
         );
-
-
-        return true;
-    }
-
-
-    // =========================================================
-    // CROPS
-    // =========================================================
-
-    private bool ProcessCropCommand(
-        LandscapeCommand command
-    )
-    {
-        if (cropManager == null)
-        {
-            SetOutput(
-                "CropManager is not assigned."
-            );
-
-            return false;
-        }
-
-
-        if (command.crops == null)
-        {
-            SetOutput(
-                "The AI returned no crop settings."
-            );
-
-            return false;
-        }
-
-
-        CropCommand crop =
-            command.crops;
-
-
-        string action =
-            crop.action;
-
-
-        if (string.IsNullOrWhiteSpace(action))
-        {
-            SetOutput(
-                "The AI did not specify the crop action."
-            );
-
-            return false;
-        }
-
-
-        action =
-            action.Trim().ToLowerInvariant();
-
-
-        string cropType =
-            NormalizeName(
-                crop.cropType
-            );
-
-
-        Debug.Log(
-            "[DemoChat] Crop action = " +
-            action +
-            " | Crop = " +
-            cropType
-        );
-
-
-        // =====================================================
-        // PLANT
-        // =====================================================
-
-        if (
-            action == "plant_crop" ||
-            action == "plant_crops" ||
-            action == "plant" ||
-            action == "sow"
-        )
-        {
-            return PlantCrops(
-                crop
-            );
-        }
-
-
-        // =====================================================
-        // GROW ONE
-        // =====================================================
-
-        if (
-            action == "grow" ||
-            action == "grow_crop"
-        )
-        {
-            return GrowCrops(
-                cropType,
-                false
-            );
-        }
-
-
-        // =====================================================
-        // GROW ALL
-        // =====================================================
-
-        if (
-            action == "grow_all" ||
-            action == "grow_all_crops" ||
-            action == "mature_all"
-        )
-        {
-            return GrowCrops(
-                cropType,
-                true
-            );
-        }
-
-
-        // =====================================================
-        // HARVEST
-        // =====================================================
-
-        if (
-            action == "harvest" ||
-            action == "harvest_crop" ||
-            action == "harvest_crops"
-        )
-        {
-            return HarvestCrops(
-                cropType
-            );
-        }
-
-
-        // =====================================================
-        // YIELD
-        // =====================================================
-
-        if (
-            action == "get_yield" ||
-            action == "yield" ||
-            action == "crop_yield"
-        )
-        {
-            return ReportYield(
-                cropType
-            );
-        }
-
-
-        // =====================================================
-        // INFORMATION
-        // =====================================================
-
-        if (
-            action == "crop_info" ||
-            action == "get_crop_info" ||
-            action == "status"
-        )
-        {
-            return ReportCropInformation(
-                cropType
-            );
-        }
-
-
-        SetOutput(
-            "Unknown crop action: " +
-            action
-        );
-
-
-        return false;
-    }
-
-
-    // =========================================================
-    // ENVIRONMENT
-    // =========================================================
-
-    private bool ProcessEnvironmentCommand(
-        LandscapeCommand command
-    )
-    {
-        if (environmentManager == null)
-        {
-            SetOutput(
-                "EnvironmentManager is not assigned."
-            );
-
-            return false;
-        }
-
-
-        if (command.environment == null)
-        {
-            SetOutput(
-                "The AI returned no environment settings."
-            );
-
-            return false;
-        }
-
-
-        EnvironmentCommand environment =
-            command.environment;
-
-
-        string action =
-            environment.action;
-
-
-        if (string.IsNullOrWhiteSpace(action))
-        {
-            SetOutput(
-                "The AI did not specify the environment action."
-            );
-
-            return false;
-        }
-
-
-        action =
-            action.Trim().ToLowerInvariant();
-
-
-        float amount =
-            Mathf.Clamp(
-                environment.amount,
-                0f,
-                1f
-            );
-
-
-        bool success =
-            environmentManager.ApplyEnvironmentCommand(
-                action,
-                amount
-            );
-
-
-        if (!success)
-        {
-            SetOutput(
-                "I could not apply the environment change."
-            );
-
-            return false;
-        }
-
-
-        SetOutput(
-            "Environment updated.\n\n" +
-            "Action: " +
-            action
-        );
-
 
         return true;
     }
@@ -2947,38 +2867,18 @@ public class DemoChat : MonoBehaviour
             return false;
         }
 
-
         if (command.building == null)
         {
-            SetOutput(
-                "The AI returned no building settings."
-            );
-
             return false;
         }
-
 
         BuildingCommand building =
             command.building;
 
-
         string action =
-            building.action;
-
-
-        if (string.IsNullOrWhiteSpace(action))
-        {
-            SetOutput(
-                "The AI did not specify the building action."
-            );
-
-            return false;
-        }
-
-
-        action =
-            action.Trim().ToLowerInvariant();
-
+            building.action
+                .Trim()
+                .ToLowerInvariant();
 
         int count =
             Mathf.Clamp(
@@ -2990,19 +2890,7 @@ public class DemoChat : MonoBehaviour
             );
 
 
-        Debug.Log(
-            "[DemoChat] Building action = " +
-            action +
-            " | Type = " +
-            building.buildingType +
-            " | Count = " +
-            count
-        );
-
-
-        // =====================================================
         // HOUSE
-        // =====================================================
 
         if (
             action == "house" ||
@@ -3011,9 +2899,7 @@ public class DemoChat : MonoBehaviour
             action == "create_houses"
         )
         {
-            int created =
-                0;
-
+            int created = 0;
 
             for (
                 int i = 0;
@@ -3024,13 +2910,10 @@ public class DemoChat : MonoBehaviour
                 int before =
                     buildingGenerator.GetBuildingCount();
 
-
                 buildingGenerator.CreateRandomHouse();
-
 
                 int after =
                     buildingGenerator.GetBuildingCount();
-
 
                 if (after > before)
                 {
@@ -3038,33 +2921,26 @@ public class DemoChat : MonoBehaviour
                 }
             }
 
-
             if (created == 0)
             {
                 SetOutput(
-                    "I could not create any houses. " +
-                    "Check the house prefab, terrain, slope, " +
-                    "and available space."
+                    "I could not create any houses."
                 );
 
                 return false;
             }
 
-
             SetOutput(
                 "Created " +
                 created +
-                " house(s) on the existing terrain."
+                " house(s)."
             );
-
 
             return true;
         }
 
 
-        // =====================================================
         // TEMPLE
-        // =====================================================
 
         if (
             action == "temple" ||
@@ -3073,9 +2949,7 @@ public class DemoChat : MonoBehaviour
             action == "create_temples"
         )
         {
-            int created =
-                0;
-
+            int created = 0;
 
             for (
                 int i = 0;
@@ -3086,13 +2960,10 @@ public class DemoChat : MonoBehaviour
                 int before =
                     buildingGenerator.GetBuildingCount();
 
-
                 buildingGenerator.CreateRandomTemple();
-
 
                 int after =
                     buildingGenerator.GetBuildingCount();
-
 
                 if (after > before)
                 {
@@ -3100,33 +2971,26 @@ public class DemoChat : MonoBehaviour
                 }
             }
 
-
             if (created == 0)
             {
                 SetOutput(
-                    "I could not create any temples. " +
-                    "Check the temple prefab, terrain, slope, " +
-                    "and available space."
+                    "I could not create any temples."
                 );
 
                 return false;
             }
 
-
             SetOutput(
                 "Created " +
                 created +
-                " temple(s) on the existing terrain."
+                " temple(s)."
             );
-
 
             return true;
         }
 
 
-        // =====================================================
         // RANDOM BUILDING
-        // =====================================================
 
         if (
             action == "random" ||
@@ -3135,9 +2999,7 @@ public class DemoChat : MonoBehaviour
             action == "random_building"
         )
         {
-            int created =
-                0;
-
+            int created = 0;
 
             for (
                 int i = 0;
@@ -3148,13 +3010,10 @@ public class DemoChat : MonoBehaviour
                 int before =
                     buildingGenerator.GetBuildingCount();
 
-
                 buildingGenerator.CreateRandomBuilding();
-
 
                 int after =
                     buildingGenerator.GetBuildingCount();
-
 
                 if (after > before)
                 {
@@ -3162,18 +3021,14 @@ public class DemoChat : MonoBehaviour
                 }
             }
 
-
             if (created == 0)
             {
                 SetOutput(
-                    "I could not create any random buildings. " +
-                    "Check the building prefabs, terrain, " +
-                    "slope, and available space."
+                    "I could not create any random buildings."
                 );
 
                 return false;
             }
-
 
             SetOutput(
                 "Created " +
@@ -3181,14 +3036,11 @@ public class DemoChat : MonoBehaviour
                 " random building(s)."
             );
 
-
             return true;
         }
 
 
-        // =====================================================
         // MULTIPLE RANDOM BUILDINGS
-        // =====================================================
 
         if (
             action == "create_random_buildings" ||
@@ -3198,22 +3050,18 @@ public class DemoChat : MonoBehaviour
             int before =
                 buildingGenerator.GetBuildingCount();
 
-
             buildingGenerator.CreateRandomBuildings(
                 count
             );
 
-
             int after =
                 buildingGenerator.GetBuildingCount();
-
 
             int created =
                 Mathf.Max(
                     after - before,
                     0
                 );
-
 
             if (created == 0)
             {
@@ -3224,21 +3072,17 @@ public class DemoChat : MonoBehaviour
                 return false;
             }
 
-
             SetOutput(
                 "Created " +
                 created +
                 " random building(s)."
             );
 
-
             return true;
         }
 
 
-        // =====================================================
         // CLEAR
-        // =====================================================
 
         if (
             action == "clear" ||
@@ -3250,9 +3094,7 @@ public class DemoChat : MonoBehaviour
             int previousCount =
                 buildingGenerator.GetBuildingCount();
 
-
             buildingGenerator.ClearBuildings();
-
 
             SetOutput(
                 "Removed " +
@@ -3260,609 +3102,104 @@ public class DemoChat : MonoBehaviour
                 " generated building(s)."
             );
 
-
             return true;
         }
 
-
-        // =====================================================
-        // UNKNOWN BUILDING ACTION
-        // =====================================================
 
         SetOutput(
             "Unknown building action: " +
             action
         );
 
-
         return false;
     }
 
 
     // =========================================================
-    // PLANT CROPS
+    // WATER
     // =========================================================
 
-    private bool PlantCrops(
-        CropCommand command
+    private bool ProcessWaterCommand(
+        LandscapeCommand command
     )
     {
-        if (cropManager == null)
+        if (waterManager == null)
         {
             SetOutput(
-                "CropManager is not assigned."
+                "WaterManager is not assigned."
             );
 
             return false;
         }
 
-
-        int count =
-            Mathf.Clamp(
-                command.count <= 0
-                    ? 1
-                    : command.count,
-                1,
-                5000
-            );
-
-
-        string cropType =
-            NormalizeName(
-                command.cropType
-            );
-
-
-        Vector3 center =
-            new Vector3(
-                command.centerX,
-                0f,
-                command.centerZ
-            );
-
-
-        float radius =
-            command.radius <= 0f
-                ? 30f
-                : command.radius;
-
-
-        float spacing =
-            command.spacing <= 0f
-                ? 2f
-                : command.spacing;
-
-
-        int planted =
-            cropManager.PlantCrops(
-                cropType,
-                count,
-                center,
-                radius,
-                spacing
-            );
-
-
-        if (planted <= 0)
+        if (command.water == null)
         {
             SetOutput(
-                "No " +
-                cropType +
-                " crops were planted.\n\n" +
-                "Make sure the planting position is inside " +
-                "a SoilArea and the crop type exists."
+                "No water command was provided."
             );
 
             return false;
         }
 
-
-        SetOutput(
-            "Planted " +
-            planted +
-            " " +
-            cropType +
-            " crop(s)."
-        );
+        string action =
+            command.water.action
+                .Trim()
+                .ToLowerInvariant();
 
 
-        return true;
-    }
-
-
-    // =========================================================
-    // GET ALL CROPS
-    // =========================================================
-
-    private CropManager.CropInstance[] GetAllCrops()
-    {
-        return FindObjectsByType<CropManager.CropInstance>(
-            FindObjectsInactive.Exclude,
-            FindObjectsSortMode.None
-        );
-    }
-
-
-    // =========================================================
-    // GROW CROPS
-    // =========================================================
-
-    private bool GrowCrops(
-        string cropType,
-        bool all
-    )
-    {
-        CropManager.CropInstance[] crops =
-            GetAllCrops();
-
-
-        int affected =
-            0;
-
-
-        foreach (
-            CropManager.CropInstance crop
-            in crops
-        )
-        {
-            if (crop == null)
-            {
-                continue;
-            }
-
-
-            if (
-                !IsCropMatch(
-                    crop,
-                    cropType
-                )
-            )
-            {
-                continue;
-            }
-
-
-            if (all)
-            {
-                crop.GrowToMaturity();
-
-                affected++;
-            }
-            else
-            {
-                if (crop.Grow())
-                {
-                    affected++;
-                }
-            }
-        }
-
-
-        if (affected == 0)
-        {
-            SetOutput(
-                "No matching crops were found to grow."
-            );
-
-            return false;
-        }
-
-
-        SetOutput(
-            "Grew " +
-            affected +
-            " " +
-            cropType +
-            " crop(s)."
-        );
-
-
-        return true;
-    }
-
-
-    // =========================================================
-    // HARVEST CROPS
-    // =========================================================
-
-    private bool HarvestCrops(
-        string cropType
-    )
-    {
-        CropManager.CropInstance[] crops =
-            GetAllCrops();
-
-
-        List<CropManager.CropInstance>
-            harvestList =
-            new List<CropManager.CropInstance>();
-
-
-        foreach (
-            CropManager.CropInstance crop
-            in crops
-        )
-        {
-            if (crop == null)
-            {
-                continue;
-            }
-
-
-            if (
-                !IsCropMatch(
-                    crop,
-                    cropType
-                )
-            )
-            {
-                continue;
-            }
-
-
-            if (!crop.IsMature)
-            {
-                continue;
-            }
-
-
-            harvestList.Add(
-                crop
-            );
-        }
-
-
-        if (harvestList.Count == 0)
-        {
-            SetOutput(
-                "No mature " +
-                cropType +
-                " crops are ready to harvest."
-            );
-
-            return false;
-        }
-
-
-        int harvested =
-            harvestList.Count;
-
-
-        foreach (
-            CropManager.CropInstance crop
-            in harvestList
-        )
-        {
-            if (crop == null)
-            {
-                continue;
-            }
-
-
-            cropManager.RemoveCrop(
-                crop.cropId
-            );
-        }
-
-
-        AddYield(
-            cropType,
-            harvested
-        );
-
-
-        SetOutput(
-            "Harvested " +
-            harvested +
-            " " +
-            cropType +
-            " crop(s).\n\n" +
-            "Yield: " +
-            GetYield(
-                cropType
-            )
-        );
-
-
-        return true;
-    }
-
-
-    // =========================================================
-    // CROP MATCH
-    // =========================================================
-
-    private bool IsCropMatch(
-        CropManager.CropInstance crop,
-        string requestedType
-    )
-    {
         if (
-            string.IsNullOrWhiteSpace(
-                requestedType
-            )
+            action == "create_river" ||
+            action == "river"
         )
         {
+            waterManager.CreateRiver();
+
+            SetOutput(
+                "Created a river at a random safe nearby location."
+            );
+
             return true;
         }
 
 
         if (
-            requestedType.Equals(
-                "all",
-                StringComparison.OrdinalIgnoreCase
-            )
+            action == "create_lake" ||
+            action == "lake"
         )
         {
+            waterManager.CreateLake();
+
+            SetOutput(
+                "Created a lake at a random safe nearby location."
+            );
+
             return true;
         }
 
 
         if (
-            requestedType.Equals(
-                "default",
-                StringComparison.OrdinalIgnoreCase
-            )
+            action == "delete" ||
+            action == "delete_water" ||
+            action == "remove_water" ||
+            action == "clear_water"
         )
         {
+            waterManager.DeleteWater();
+
+            SetOutput(
+                "Removed the generated water and restored the terrain."
+            );
+
             return true;
-        }
-
-
-        return
-            crop.cropName.Equals(
-                requestedType,
-                StringComparison.OrdinalIgnoreCase
-            );
-    }
-
-
-    // =========================================================
-    // ADD YIELD
-    // =========================================================
-
-    private void AddYield(
-        string cropType,
-        int amount
-    )
-    {
-        if (
-            harvestedYield.ContainsKey(
-                cropType
-            )
-        )
-        {
-            harvestedYield[cropType] +=
-                amount;
-        }
-        else
-        {
-            harvestedYield[cropType] =
-                amount;
-        }
-    }
-
-
-    // =========================================================
-    // GET YIELD
-    // =========================================================
-
-    private int GetYield(
-        string cropType
-    )
-    {
-        if (
-            string.IsNullOrWhiteSpace(
-                cropType
-            ) ||
-            cropType.Equals(
-                "all",
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
-        {
-            int total =
-                0;
-
-
-            foreach (
-                int value
-                in harvestedYield.Values
-            )
-            {
-                total += value;
-            }
-
-
-            return total;
-        }
-
-
-        int result;
-
-
-        if (
-            harvestedYield.TryGetValue(
-                cropType,
-                out result
-            )
-        )
-        {
-            return result;
-        }
-
-
-        return 0;
-    }
-
-
-    // =========================================================
-    // REPORT YIELD
-    // =========================================================
-
-    private bool ReportYield(
-        string cropType
-    )
-    {
-        int yield =
-            GetYield(
-                cropType
-            );
-
-
-        if (
-            cropType.Equals(
-                "all",
-                StringComparison.OrdinalIgnoreCase
-            ) ||
-            string.IsNullOrWhiteSpace(cropType)
-        )
-        {
-            SetOutput(
-                "Total crop yield: " +
-                yield
-            );
-        }
-        else
-        {
-            SetOutput(
-                cropType +
-                " yield: " +
-                yield
-            );
-        }
-
-
-        return true;
-    }
-
-
-    // =========================================================
-    // REPORT CROP INFORMATION
-    // =========================================================
-
-    private bool ReportCropInformation(
-        string cropType
-    )
-    {
-        CropManager.CropInstance[] crops =
-            GetAllCrops();
-
-
-        int count =
-            0;
-
-
-        int mature =
-            0;
-
-
-        StringBuilder builder =
-            new StringBuilder();
-
-
-        foreach (
-            CropManager.CropInstance crop
-            in crops
-        )
-        {
-            if (crop == null)
-            {
-                continue;
-            }
-
-
-            if (
-                !IsCropMatch(
-                    crop,
-                    cropType
-                )
-            )
-            {
-                continue;
-            }
-
-
-            count++;
-
-
-            if (crop.IsMature)
-            {
-                mature++;
-            }
-
-
-            builder.AppendLine(
-                GetCropGrowthInformation(
-                    crop
-                )
-            );
-
-
-            builder.AppendLine();
-        }
-
-
-        if (count == 0)
-        {
-            SetOutput(
-                "No " +
-                cropType +
-                " crops found."
-            );
-
-            return false;
         }
 
 
         SetOutput(
-            "Crop information\n\n" +
-            "Crop type: " +
-            cropType +
-            "\n" +
-            "Total: " +
-            count +
-            "\n" +
-            "Mature: " +
-            mature +
-            "\n\n" +
-            builder.ToString()
+            "Unknown water action: " +
+            action
         );
 
-
-        return true;
-    }
-
-
-    // =========================================================
-    // CROP INFORMATION
-    // =========================================================
-
-    private string GetCropGrowthInformation(
-        CropManager.CropInstance crop
-    )
-    {
-        if (crop == null)
-        {
-            return "";
-        }
-
-
-        return
-            "ID: " +
-            crop.cropId +
-            " | " +
-            "Type: " +
-            crop.cropName +
-            " | " +
-            "Stage: " +
-            crop.CurrentStage +
-            " | " +
-            "Mature: " +
-            crop.IsMature +
-            " | " +
-            "Position: " +
-            crop.transform.position;
+        return false;
     }
 
 
@@ -3879,10 +3216,8 @@ public class DemoChat : MonoBehaviour
             return "Default";
         }
 
-
         string result =
             value.Trim();
-
 
         result =
             Regex.Replace(
@@ -3892,7 +3227,6 @@ public class DemoChat : MonoBehaviour
                 RegexOptions.IgnoreCase
             );
 
-
         result =
             Regex.Replace(
                 result,
@@ -3901,36 +3235,16 @@ public class DemoChat : MonoBehaviour
                 RegexOptions.IgnoreCase
             );
 
-
         result =
             result.Trim();
 
-
-        if (
-            string.IsNullOrWhiteSpace(
-                result
-            )
-        )
+        if (string.IsNullOrWhiteSpace(result))
         {
             return "Default";
         }
 
-
-        if (
-            result.Equals(
-                "all",
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
-        {
-            return "all";
-        }
-
-
         return
-            char.ToUpper(
-                result[0]
-            ) +
+            char.ToUpper(result[0]) +
             result.Substring(1);
     }
 
@@ -3948,10 +3262,8 @@ public class DemoChat : MonoBehaviour
             return "";
         }
 
-
         string lower =
             json.ToLowerInvariant();
-
 
         if (
             lower.Contains(
@@ -3962,6 +3274,23 @@ public class DemoChat : MonoBehaviour
             return "unknown";
         }
 
+        if (
+            lower.Contains(
+                "\"advice\""
+            )
+        )
+        {
+            return "advice";
+        }
+
+        if (
+            lower.Contains(
+                "\"water\""
+            )
+        )
+        {
+            return "water";
+        }
 
         if (
             lower.Contains(
@@ -3972,27 +3301,6 @@ public class DemoChat : MonoBehaviour
             return "building";
         }
 
-
-        if (
-            lower.Contains(
-                "\"buildings\""
-            )
-        )
-        {
-            return "building";
-        }
-
-
-        if (
-            lower.Contains(
-                "\"crops\""
-            )
-        )
-        {
-            return "crops";
-        }
-
-
         if (
             lower.Contains(
                 "\"trees\""
@@ -4002,7 +3310,6 @@ public class DemoChat : MonoBehaviour
             return "trees";
         }
 
-
         if (
             lower.Contains(
                 "\"terrain\""
@@ -4011,17 +3318,6 @@ public class DemoChat : MonoBehaviour
         {
             return "terrain";
         }
-
-
-        if (
-            lower.Contains(
-                "\"environment\""
-            )
-        )
-        {
-            return "environment";
-        }
-
 
         return "";
     }
@@ -4034,449 +3330,436 @@ public class DemoChat : MonoBehaviour
     private string BuildSystemPrompt()
     {
         return
-            "You are a Unity landscape, farming, building, " +
-            "and environment assistant.\n\n" +
+            "You are an interactive 3D environment design assistant inside a Unity application.\n\n" +
 
-            "You control FIVE systems:\n" +
-            "1. Existing Terrain Modification\n" +
+            "Your role is NOT simply to match keywords to commands.\n" +
+            "Your job is to understand what the user is trying to accomplish, interpret natural language using the Unity spatial context and conversation context, determine whether Unity can perform the requested action, and then either provide a supported Unity command, provide useful design advice, or clearly explain why the request cannot be performed.\n\n" +
+
+            "IMPORTANT ARCHITECTURE:\n" +
+            "You decide WHAT the user wants.\n" +
+            "You may provide DESIGN ADVICE.\n" +
+            "Unity decides HOW the physical environment is changed.\n" +
+            "Do NOT calculate terrain geometry yourself.\n" +
+            "Do NOT invent coordinates.\n" +
+            "Do NOT invent object IDs.\n" +
+            "Do NOT pretend that an action has already happened.\n\n" +
+
+
+           
+
+            "CONVERSATION:\n" +
+            "You are allowed to use recent conversation context to understand follow-up requests.\n" +
+            "The current Unity spatial context is authoritative.\n" +
+            "Never allow an old conversation coordinate or old object reference to override current Unity spatial context.\n" +
+            "The user may refer to previous advice using phrases such as:\n" +
+            "\"do it\"\n" +
+            "\"do that\"\n" +
+            "\"apply that\"\n" +
+            "\"go ahead\"\n" +
+            "\"do it too\"\n" +
+            "Use the previous advice when the reference is clear.\n\n" +
+
+
+            
+
+            "You control FOUR Unity environment systems:\n" +
+            "1. Existing Terrain and Mountains\n" +
             "2. Trees\n" +
-            "3. Crops\n" +
-            "4. Environment\n" +
-            "5. Buildings\n\n" +
-
-            "Your job is to convert natural language into EXACTLY " +
-            "ONE JSON command.\n\n" +
-
-            "IMPORTANT TERRAIN RULE:\n" +
-            "There is ALREADY a Unity Terrain in the scene.\n" +
-            "You must NEVER create a new Unity Terrain.\n" +
-            "You must NEVER replace the existing Terrain.\n" +
-            "You must NEVER delete the existing Terrain.\n" +
-            "Terrain commands modify the EXISTING Terrain heightmap.\n\n" +
-
-            "IMPORTANT BUILDING RULE:\n" +
-            "There is a BuildingGenerator in the scene.\n" +
-            "BuildingGenerator creates buildings on the EXISTING terrain.\n" +
-            "The BuildingGenerator decides the valid terrain position.\n" +
-            "The BuildingGenerator checks terrain slope.\n" +
-            "The BuildingGenerator checks building spacing.\n" +
-            "The BuildingGenerator controls random rotation.\n" +
-            "Do NOT invent building coordinates.\n" +
-            "Do NOT invent building IDs.\n" +
-            "Do NOT claim that a building exists unless Unity creates it.\n\n" +
-
-            "SUPPORTED BUILDING TYPES:\n" +
-            "House\n" +
-            "Temple\n" +
-            "Random building\n\n" +
-
-            "VERY IMPORTANT:\n" +
-            "You are NOT allowed to guess when the user's meaning " +
-            "is unclear.\n\n" +
-
-            "If the request is ambiguous, incomplete, vague, or " +
-            "cannot confidently be mapped to a supported action, " +
-            "return commandType = \"unknown\".\n\n" +
-
-            "Return ONLY valid JSON.\n" +
-            "No Markdown.\n" +
-            "No code fences.\n" +
-            "No explanation outside the JSON.\n\n" +
+            "3. Buildings\n" +
+            "4. Water\n\n" +
 
 
-            // =================================================
-            // CONFIDENCE
-            // =================================================
+           
 
-            "CONFIDENCE:\n\n" +
+            "INTENT UNDERSTANDING:\n" +
+            "First determine the user's intent.\n" +
+            "The user may be asking you to:\n" +
+            "- create something\n" +
+            "- modify something\n" +
+            "- remove something\n" +
+            "- move something\n" +
+            "- restore something\n" +
+            "- ask for design advice\n" +
+            "- ask what would look good\n" +
+            "- ask whether something is possible\n" +
+            "- ask an ambiguous question that requires clarification\n" +
+            "- ask you to apply a recommendation from earlier in the conversation\n\n" +
 
-            "Every command MUST contain:\n" +
-            "\"confidence\": a number from 0.0 to 1.0\n" +
-            "\"reason\": a short explanation of why the command " +
-            "was selected.\n\n" +
-
-            "Confidence means confidence that you correctly " +
-            "understood the user's intended action.\n\n" +
-
-            "0.80 to 1.00 = high confidence.\n" +
-            "0.50 to 0.79 = medium confidence.\n" +
-            "Below 0.50 = low confidence.\n\n" +
-
-            "Do NOT artificially increase confidence.\n" +
-            "Do NOT use 1.0 simply because one action is possible.\n\n" +
+            "Do not treat every sentence as an instruction to modify the environment.\n\n" +
 
 
-            // =================================================
-            // UNKNOWN
-            // =================================================
+            
 
-            "UNKNOWN COMMAND:\n\n" +
+            "DESIGN ADVICE:\n" +
+            "If the user asks for suggestions, recommendations, opinions, explanations, or design guidance, use commandType = \"advice\".\n" +
+            "Do NOT modify the Unity environment merely because the user asks for advice.\n\n" +
 
-            "If the user says:\n" +
-            "\"make it nicer\"\n" +
-            "\"make it beautiful\"\n" +
-            "\"change it\"\n" +
-            "\"do something with it\"\n" +
-            "\"make this better\"\n\n" +
+            "When useful, advice SHOULD include ONE PRIMARY ACTIONABLE RECOMMENDATION.\n" +
+            "Put the human-readable recommendation in assistantMessage.\n" +
+            "Put the executable recommendation in suggestedCommand.\n" +
+            "The suggestedCommand must be a normal supported Unity command.\n\n" +
 
-            "and the intended system or operation is unclear, " +
-            "return:\n\n" +
+            "For example, if the user asks:\n" +
+            "\"How can I improve this area?\"\n\n" +
+            "you may answer with advice such as:\n" +
+            "\"Adding a small group of trees would make the area feel more natural.\"\n\n" +
+            "and provide a suggestedCommand that plants trees.\n\n" +
 
-            "{\n" +
-            "  \"commandType\":\"unknown\",\n" +
-            "  \"confidence\":0.20,\n" +
-            "  \"reason\":\"The requested change is ambiguous.\"\n" +
-            "}\n\n" +
+            "The suggestedCommand is OPTIONAL.\n" +
+            "Use it when your advice naturally leads to one clear supported action.\n" +
+            "Do NOT invent a suggestedCommand for unsupported functionality.\n\n" +
 
-            "NEVER force an ambiguous request into terrain, tree, " +
-            "crop, environment, or building commands.\n\n" +
+            "IMPORTANT:\n" +
+            "Give ONE primary executable recommendation, not a list of multiple executable commands.\n" +
+            "The current command protocol executes one command at a time.\n\n" +
+
+
+         
+
+            "APPLYING ADVICE:\n" +
+            "If the user says \"do it\", \"do that\", \"apply it\", \"go ahead\", or similar and the previous assistant advice contained a suggestedCommand, the user is asking you to apply that previous recommendation.\n" +
+            "Return the actual executable command rather than another advice response.\n" +
+            "Use the previous recommendation as the intended action.\n\n" +
+
+
+            
+
+            "CLARIFICATION:\n" +
+            "If the user request is genuinely ambiguous, do not guess.\n" +
+            "Use commandType = \"unknown\".\n" +
+            "Use the reason field to explain what information is missing.\n" +
+            "Ask the user to clarify in a natural way.\n\n" +
 
 
             // =================================================
             // TERRAIN
             // =================================================
 
-            "EXISTING TERRAIN SYSTEM:\n\n" +
-
-            "The Unity scene already contains a Terrain.\n\n" +
-
-            "TerrainGenerator modifies that existing Terrain " +
-            "directly by changing its heightmap.\n\n" +
-
-            "SUPPORTED TERRAIN ACTIONS:\n" +
-            "mountain\n" +
-            "hill\n" +
-            "valley\n" +
-            "reset\n\n" +
-
-            "Use commandType = \"terrain\".\n\n" +
-
-            "MOUNTAIN:\n" +
-            "\"create a mountain\" -> action = \"mountain\"\n" +
-            "\"make a mountain\" -> action = \"mountain\"\n" +
-            "\"create mountains\" -> action = \"mountains\"\n" +
-            "\"make the terrain mountainous\" -> action = \"mountain\"\n\n" +
-
-            "Example:\n" +
-            "{\n" +
-            "  \"commandType\":\"terrain\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested a mountain on the existing terrain.\",\n" +
-            "  \"terrain\":{\n" +
-            "    \"action\":\"mountain\",\n" +
-            "    \"count\":1\n" +
-            "  }\n" +
-            "}\n\n" +
-
-            "HILLS:\n" +
-            "\"create a hill\" -> action = \"hill\"\n" +
-            "\"create hills\" -> action = \"hills\"\n" +
-            "\"make some hills\" -> action = \"hills\"\n\n" +
-
-            "VALLEY:\n" +
-            "\"create a valley\" -> action = \"valley\"\n" +
-            "\"make a valley\" -> action = \"valley\"\n\n" +
-
-            "RESET:\n" +
-            "\"reset the terrain\" -> action = \"reset\"\n" +
-            "\"restore the terrain\" -> action = \"reset\"\n\n" +
-
-            "TerrainGenerator controls terrain position and shape.\n" +
-            "Do not return width.\n" +
-            "Do not return depth.\n" +
-            "Do not return terrain height.\n" +
-            "Do not create a new Terrain.\n\n" +
+            "IMPORTANT TERRAIN RULE:\n" +
+            "There is ALREADY a Unity Terrain in the scene.\n" +
+            "NEVER create a new Unity Terrain.\n" +
+            "NEVER replace the existing Terrain.\n" +
+            "NEVER delete the existing Terrain.\n" +
+            "Terrain commands modify the EXISTING Terrain.\n\n" +
 
 
             // =================================================
-            // TREES
+            // MOUNTAIN POINTING
             // =================================================
 
-            "TREE COMMAND:\n\n" +
-
-            "{\n" +
-            "  \"commandType\":\"trees\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested tree planting.\",\n" +
-            "  \"trees\":{\n" +
-            "    \"action\":\"plant_trees\",\n" +
-            "    \"treeType\":\"Oak\",\n" +
-            "    \"count\":20,\n" +
-            "    \"centerX\":100,\n" +
-            "    \"centerZ\":100,\n" +
-            "    \"radius\":30,\n" +
-            "    \"spacing\":5\n" +
-            "  }\n" +
-            "}\n\n" +
-
-            "TREE TYPES:\n" +
-            "TreeManager decides which species exist.\n" +
-            "Never invent a replacement species.\n" +
-            "Preserve the user's requested tree species.\n\n" +
-
-            "Examples:\n" +
-            "oak -> Oak\n" +
-            "pine -> Pine\n" +
-            "palm -> Palm\n" +
-            "birch -> Birch\n" +
-            "maple -> Maple\n" +
-            "eucalyptus -> Eucalyptus\n" +
-            "apple -> Apple\n\n" +
+            "IMPORTANT MOUNTAIN POINTING RULE:\n" +
+            "Mountains exist on the existing Unity Terrain.\n" +
+            "Unity provides the CURRENT pointed Terrain ground position.\n" +
+            "The CURRENT pointed world position is the ONLY reference used to identify the mountain for modification.\n" +
+            "This works for BOTH mountains that already existed on the Terrain and mountains generated by Unity.\n" +
+            "Mountain IDs are NOT required and are NOT used for mountain modification.\n" +
+            "If the user says 'this mountain', use the CURRENT pointed Terrain ground position.\n" +
+            "If the user says 'this mountain is too short', modify the mountain at the CURRENT pointed Terrain ground position.\n" +
+            "If the user says 'make this mountain taller', modify the mountain at the CURRENT pointed Terrain ground position.\n" +
+            "If the user says 'make this mountain shorter', modify the mountain at the CURRENT pointed Terrain ground position.\n" +
+            "If the user asks to change the height of the pointed mountain, use the CURRENT pointed Terrain ground position.\n" +
+            "If Unity did NOT provide a current pointed Terrain ground position, do not invent one.\n\n" +
 
 
             // =================================================
-            // MOVE TREE
+            // TREE POINTING
             // =================================================
 
-            "MOVE TREE:\n\n" +
-
-            "If the user says:\n" +
-            "\"move this tree over there\"\n" +
-            "\"put this tree there\"\n" +
-            "\"move it over there\"\n\n" +
-
-            "and Unity provides a selected tree AND a pointed " +
-            "ground position, return:\n\n" +
-
-            "{\n" +
-            "  \"commandType\":\"trees\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user requested moving the currently selected tree to the pointed location.\",\n" +
-            "  \"trees\":{\n" +
-            "    \"action\":\"move_tree\",\n" +
-            "    \"treeType\":\"\"\n" +
-            "  }\n" +
-            "}\n\n" +
-
-            "Unity provides the selected tree.\n" +
-            "Unity provides the tree ID.\n" +
-            "Unity provides the target position.\n" +
+            "TREE POINTING:\n" +
+            "Unity may provide a selected tree.\n" +
+            "Unity may provide a pointed ground position.\n" +
+            "If the user says 'this tree', use the selected tree.\n" +
+            "If the user says 'over there', use the pointed ground position.\n" +
             "NEVER invent a tree ID.\n" +
             "NEVER invent movement coordinates.\n\n" +
 
 
             // =================================================
-            // CROPS
+            // WATER
             // =================================================
 
-            "CROP SYSTEM:\n\n" +
+            "WATER SYSTEM:\n" +
+            "You can control water using commandType = \"water\".\n" +
+            "Allowed actions:\n" +
+            "- create_river\n" +
+            "- create_lake\n" +
+            "- delete\n\n" +
 
-            "Use commandType = \"crops\" for crop operations.\n\n" +
+            "When the user asks to create a river or lake:\n" +
+            "- Do NOT ask the user to point.\n" +
+            "- Do NOT generate coordinates.\n" +
+            "- Do NOT use the pointing position.\n" +
+            "- WaterManager automatically chooses a random nearby safe location.\n" +
+            "- WaterManager avoids mountains and steep terrain.\n" +
+            "- Water may be close to mountains, but should not overlap mountains.\n\n" +
 
-            "PLANTING:\n" +
-            "\"plant wheat\" -> Wheat.\n" +
-            "\"plant 20 wheat crops\" -> count 20, Wheat.\n" +
-            "\"plant corn\" -> Corn.\n\n" +
-
-            "{\n" +
-            "  \"commandType\":\"crops\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested crop planting.\",\n" +
-            "  \"crops\":{\n" +
-            "    \"action\":\"plant_crops\",\n" +
-            "    \"cropType\":\"Wheat\",\n" +
-            "    \"count\":20,\n" +
-            "    \"centerX\":100,\n" +
-            "    \"centerZ\":100,\n" +
-            "    \"radius\":30,\n" +
-            "    \"spacing\":2\n" +
-            "  }\n" +
-            "}\n\n" +
-
-            "CropManager checks SoilArea before planting.\n" +
-            "Do not claim that crops were planted unless Unity " +
-            "accepts the command.\n\n" +
-
-            "GROWING:\n" +
-            "\"grow the wheat\" -> grow Wheat.\n" +
-            "\"let the wheat grow\" -> grow Wheat.\n" +
-            "\"make the wheat mature\" -> grow_all_crops Wheat.\n" +
-            "\"grow all crops\" -> grow_all_crops all.\n\n" +
-
-            "HARVESTING:\n" +
-            "\"harvest the wheat\" -> harvest Wheat.\n" +
-            "\"collect the wheat\" -> harvest Wheat.\n" +
-            "\"harvest all crops\" -> harvest all.\n\n" +
-
-            "YIELD:\n" +
-            "\"what is the yield?\" -> get_yield all.\n" +
-            "\"how much wheat did I harvest?\" -> get_yield Wheat.\n" +
-
-            "The AI MUST NEVER invent yield numbers.\n" +
-            "Unity calculates actual yield.\n\n" +
-
-            "CROP STATUS:\n" +
-            "\"how are the wheat crops doing?\" -> crop_info Wheat.\n" +
-            "\"are the wheat mature?\" -> crop_info Wheat.\n" +
-            "\"show me the crop status\" -> crop_info all.\n\n" +
-
-
-            // =================================================
-            // ENVIRONMENT
-            // =================================================
-
-            "ENVIRONMENT SYSTEM:\n\n" +
-
-            "Use commandType = \"environment\" for visual " +
-            "environment changes.\n\n" +
-
-            "Supported actions include:\n" +
-            "greener\n" +
-            "less_green\n" +
-            "brighter\n" +
-            "darker\n" +
-            "warmer\n" +
-            "cooler\n" +
-            "stronger_shadows\n" +
-            "softer_shadows\n" +
-            "add_fog\n" +
-            "remove_fog\n" +
-            "reset\n\n" +
-
-            "\"make the environment greener\" -> greener.\n" +
-            "\"make the grass more green\" -> greener.\n" +
-            "\"make everything greener\" -> greener.\n" +
-            "\"make it brighter\" -> brighter when context clearly refers to environment.\n" +
-            "\"make it darker\" -> darker.\n" +
-            "\"make it warmer\" -> warmer.\n" +
-            "\"make it cooler\" -> cooler.\n" +
-            "\"make the shadows stronger\" -> stronger_shadows.\n" +
-            "\"make the shadows softer\" -> softer_shadows.\n" +
-            "\"add fog\" -> add_fog.\n" +
-            "\"remove fog\" -> remove_fog.\n" +
-            "\"reset the environment\" -> reset.\n\n" +
+            "IMPORTANT WATER COMMAND RULE:\n" +
+            "The water command contains ONLY the action.\n" +
+            "Do NOT add centerX.\n" +
+            "Do NOT add centerZ.\n" +
+            "Do NOT add coordinates or pointing positions to the water command.\n\n" +
 
 
             // =================================================
             // BUILDINGS
             // =================================================
 
-            "BUILDING SYSTEM:\n\n" +
+            "IMPORTANT BUILDING RULE:\n" +
+            "BuildingGenerator creates buildings on the existing terrain.\n" +
+            "BuildingGenerator controls valid placement, terrain height, slope, spacing and rotation.\n" +
+            "Do NOT invent building coordinates or IDs.\n\n" +
 
-            "Use commandType = \"building\" for building operations.\n\n" +
 
-            "The available BuildingGenerator prefabs are:\n" +
+            // =================================================
+            // CAPABILITY
+            // =================================================
+
+            "CAPABILITY AWARENESS:\n" +
+            "Only promise functionality represented by the supported commands below.\n" +
+            "The current system can create and modify mountains, plant/remove/move trees, create/remove buildings, and create/remove rivers and lakes.\n" +
+            "The system does NOT currently provide arbitrary procedural generation of every possible object.\n" +
+            "For example, do not pretend that you can directly create a waterfall, road, bridge, fence, road network, animal, vehicle, or arbitrary custom object unless an available command explicitly supports it.\n" +
+            "If a request cannot be represented by the available commands, use commandType = \"unknown\" and explain the limitation.\n" +
+            "Do not hallucinate new Unity functions or systems.\n\n" +
+
+
+            // =================================================
+            // CONFIDENCE
+            // =================================================
+
+            "CONFIDENCE:\n" +
+            "Every command MUST contain:\n" +
+            "\"confidence\": a number from 0.0 to 1.0\n" +
+            "\"reason\": a short explanation.\n" +
+            "0.80 to 1.00 = high confidence.\n" +
+            "0.50 to 0.79 = medium confidence.\n" +
+            "Below 0.50 = low confidence.\n" +
+            "Do NOT artificially increase confidence.\n\n" +
+
+
+            // =================================================
+            // UNKNOWN
+            // =================================================
+
+            "UNKNOWN:\n" +
+            "If the request is unclear or unsupported, return:\n" +
+            "{\n" +
+            "  \"commandType\":\"unknown\",\n" +
+            "  \"confidence\":0.20,\n" +
+            "  \"reason\":\"Explain clearly why the request cannot currently be performed or what clarification is required.\"\n" +
+            "}\n\n" +
+
+
+            // =================================================
+            // TERRAIN COMMANDS
+            // =================================================
+
+            "TERRAIN:\n" +
+            "Use commandType = \"terrain\".\n" +
+            "The terrain already exists.\n\n" +
+
+            "Supported terrain actions:\n" +
+            "mountain\n" +
+            "mountains\n" +
+            "modify_mountain\n" +
+            "reset\n\n" +
+
+            "\"create a mountain\" -> mountain\n" +
+            "\"create mountains\" -> mountains\n" +
+            "\"create a range of mountain\" -> moutain_range\n"+
+            "\"make the terrain mountainous\" -> mountain\n\n" +
+
+            "If the user refers to a pointed mountain:\n" +
+            "\"make this mountain taller\" -> modify_mountain\n" +
+            "\"make this mountain shorter\" -> modify_mountain\n" +
+            "\"change this mountain\" -> modify_mountain\n" +
+            "\"modify this mountain\" -> modify_mountain\n\n" +
+
+            "For mountain height changes, use heightChange:\n" +
+            "taller / higher / raise -> positive heightChange, normally 5\n" +
+            "shorter / lower / reduce -> negative heightChange, normally -5\n\n" +
+
+
+            // =================================================
+            // TREES
+            // =================================================
+
+            "TREES:\n" +
+            "Use commandType = \"trees\".\n\n" +
+
+            "Supported actions:\n" +
+            "plant_trees\n" +
+            "remove_trees\n" +
+            "remove_all_trees\n" +
+            "move_tree\n\n" +
+
+            "Tree types may include:\n" +
+            "Oak\n" +
+            "Pine\n" +
+            "Palm\n" +
+            "Birch\n" +
+            "Maple\n" +
+            "Eucalyptus\n" +
+            "Apple\n" +
+            "mixed\n\n" +
+
+
+          
+
+            "TREE PLANTING:\n" +
+            "The tree planting command uses centerX, centerZ, radius and spacing.\n" +
+            "These are implementation parameters required by Unity.\n" +
+            "Do not use imaginary spatial coordinates from the conversation.\n" +
+            "If the user gives explicit numerical coordinates, they may be used as requested.\n" +
+            "Otherwise use reasonable defaults for a general planting request.\n\n" +
+
+
+            // =================================================
+            // MOVE TREE
+            // =================================================
+
+            "MOVE TREE:\n" +
+            "If the user says:\n" +
+            "\"move this tree over there\"\n" +
+            "\"put this tree there\"\n" +
+            "\"move it over there\"\n\n" +
+
+            "and Unity provides a selected tree and ground position, return:\n" +
+            "{\n" +
+            "  \"commandType\":\"trees\",\n" +
+            "  \"confidence\":0.95,\n" +
+            "  \"reason\":\"The user requested moving the selected tree to the pointed location.\",\n" +
+            "  \"trees\":{\n" +
+            "    \"action\":\"move_tree\",\n" +
+            "    \"treeType\":\"\"\n" +
+            "  }\n" +
+            "}\n\n" +
+
+
+            // =================================================
+            // BUILDINGS
+            // =================================================
+
+            "BUILDINGS:\n" +
+            "Use commandType = \"building\".\n\n" +
+
+            "Supported building types:\n" +
             "House\n" +
-            "Temple\n\n" +
+            "Temple\n" +
+            "Random building\n\n" +
 
-            "The BuildingGenerator also supports random buildings.\n\n" +
-
-            "IMPORTANT:\n" +
-            "BuildingGenerator automatically chooses a valid terrain " +
-            "position.\n" +
-            "BuildingGenerator checks the terrain slope.\n" +
-            "BuildingGenerator checks building spacing.\n" +
-            "BuildingGenerator handles terrain height.\n" +
-            "BuildingGenerator handles random rotation.\n" +
+            "BuildingGenerator chooses the physical location.\n" +
             "Do NOT invent coordinates.\n\n" +
 
-            "HOUSE:\n" +
             "\"create a house\" -> create_house\n" +
-            "\"build a house\" -> create_house\n" +
-            "\"make a house\" -> create_house\n" +
             "\"create 5 houses\" -> create_houses, count 5\n" +
-            "\"build three houses\" -> create_houses, count 3\n\n" +
-
-            "Example:\n" +
-            "{\n" +
-            "  \"commandType\":\"building\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested houses.\",\n" +
-            "  \"building\":{\n" +
-            "    \"action\":\"create_houses\",\n" +
-            "    \"buildingType\":\"House\",\n" +
-            "    \"count\":3\n" +
-            "  }\n" +
-            "}\n\n" +
-
-            "TEMPLE:\n" +
             "\"create a temple\" -> create_temple\n" +
-            "\"build a temple\" -> create_temple\n" +
-            "\"make a temple\" -> create_temple\n" +
             "\"create 3 temples\" -> create_temples, count 3\n" +
-            "\"build three temples\" -> create_temples, count 3\n\n" +
-
-            "Example:\n" +
-            "{\n" +
-            "  \"commandType\":\"building\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested temples.\",\n" +
-            "  \"building\":{\n" +
-            "    \"action\":\"create_temples\",\n" +
-            "    \"buildingType\":\"Temple\",\n" +
-            "    \"count\":3\n" +
-            "  }\n" +
-            "}\n\n" +
-
-            "RANDOM BUILDINGS:\n" +
             "\"create a random building\" -> create_random\n" +
-            "\"make a random building\" -> create_random\n" +
-            "\"create random buildings\" -> create_random_buildings\n" +
             "\"create 10 random buildings\" -> create_random_buildings, count 10\n" +
-            "\"build a small village\" -> create_random_buildings with a reasonable count only when the user clearly requests a village.\n\n" +
+            "\"remove all buildings\" -> clear_buildings\n\n" +
 
-            "Example:\n" +
+
+            // =================================================
+            // WATER
+            // =================================================
+
+            "WATER EXAMPLES:\n" +
+
+            "\"create a river\"\n" +
             "{\n" +
-            "  \"commandType\":\"building\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested random buildings.\",\n" +
-            "  \"building\":{\n" +
-            "    \"action\":\"create_random_buildings\",\n" +
-            "    \"buildingType\":\"Random\",\n" +
-            "    \"count\":10\n" +
+            "  \"commandType\":\"water\",\n" +
+            "  \"confidence\":1.0,\n" +
+            "  \"reason\":\"User requested a river.\",\n" +
+            "  \"water\":{\n" +
+            "    \"action\":\"create_river\"\n" +
             "  }\n" +
             "}\n\n" +
 
-            "CLEAR BUILDINGS:\n" +
-            "\"remove all buildings\" -> clear_buildings\n" +
-            "\"clear buildings\" -> clear_buildings\n" +
-            "\"delete all buildings\" -> clear_buildings\n\n" +
-
-            "Example:\n" +
+            "\"make a lake\"\n" +
             "{\n" +
-            "  \"commandType\":\"building\",\n" +
-            "  \"confidence\":0.95,\n" +
-            "  \"reason\":\"The user explicitly requested removal of generated buildings.\",\n" +
-            "  \"building\":{\n" +
-            "    \"action\":\"clear_buildings\",\n" +
-            "    \"buildingType\":\"\",\n" +
-            "    \"count\":1\n" +
+            "  \"commandType\":\"water\",\n" +
+            "  \"confidence\":1.0,\n" +
+            "  \"reason\":\"User requested a lake.\",\n" +
+            "  \"water\":{\n" +
+            "    \"action\":\"create_lake\"\n" +
             "  }\n" +
             "}\n\n" +
 
-            "BUILDING RULES:\n" +
-            "Do not invent building coordinates.\n" +
-            "Do not invent building IDs.\n" +
-            "Do not invent building prefabs.\n" +
-            "Do not claim a building was successfully created.\n" +
-            "Unity controls physical building creation.\n\n" +
+
+            // =================================================
+            // ADVICE EXAMPLE
+            // =================================================
+
+            "ADVICE EXAMPLE:\n" +
+            "If the user asks:\n" +
+            "\"What would look good around this mountain?\"\n\n" +
+
+            "Return an advice response similar to:\n" +
+            "{\n" +
+            "  \"commandType\":\"advice\",\n" +
+            "  \"confidence\":0.90,\n" +
+            "  \"reason\":\"The user is asking for design advice rather than requesting an immediate modification.\",\n" +
+            "  \"assistantMessage\":\"A natural-looking approach would be to add a small group of trees around the lower slopes while leaving some open space near the mountain.\",\n" +
+            "  \"suggestedCommand\":{\n" +
+            "    \"commandType\":\"trees\",\n" +
+            "    \"confidence\":0.95,\n" +
+            "    \"reason\":\"This recommendation can be implemented by the Unity tree system.\",\n" +
+            "    \"trees\":{\n" +
+            "      \"action\":\"plant_trees\",\n" +
+            "      \"treeType\":\"mixed\",\n" +
+            "      \"count\":20,\n" +
+            "      \"centerX\":0,\n" +
+            "      \"centerZ\":0,\n" +
+            "      \"radius\":15,\n" +
+            "      \"spacing\":3\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n\n" +
+
+
+            // =================================================
+            // APPLY ADVICE EXAMPLE
+            // =================================================
+
+            "APPLY ADVICE EXAMPLE:\n" +
+            "If the previous advice recommended planting trees and the user says:\n" +
+            "\"Do it\"\n" +
+            "\"Do that\"\n" +
+            "\"Apply it\"\n" +
+            "\"Go ahead\"\n\n" +
+
+            "return the actual executable trees command rather than commandType = advice.\n\n" +
 
 
             // =================================================
             // FINAL RULES
             // =================================================
 
-            "FINAL RULES:\n\n" +
-
+            "FINAL RULES:\n" +
             "1. Return exactly ONE JSON command.\n" +
             "2. Return ONLY JSON.\n" +
             "3. Always include confidence.\n" +
             "4. Always include reason.\n" +
-            "5. Never guess when the request is ambiguous.\n" +
+            "5. Never guess genuinely ambiguous requests.\n" +
             "6. Use unknown when necessary.\n" +
             "7. Never invent tree IDs.\n" +
-            "8. Never invent exact movement coordinates.\n" +
-            "9. Never invent crop yield numbers.\n" +
+            "8. Never invent mountain IDs.\n" +
+            "9. Never invent movement coordinates.\n" +
             "10. Never invent building coordinates.\n" +
             "11. Never invent building IDs.\n" +
             "12. Never claim Unity performed an action.\n" +
-            "13. Unity is responsible for physical execution.\n" +
-            "14. Preserve the user's requested tree or crop type.\n" +
-            "15. Terrain means MODIFY THE EXISTING TERRAIN.\n" +
-            "16. NEVER CREATE A NEW TERRAIN.\n" +
-            "17. NEVER DELETE OR REPLACE THE EXISTING TERRAIN.\n" +
-            "18. TerrainGenerator controls terrain placement and shape.\n" +
-            "19. BuildingGenerator controls building placement.\n";
+            "13. Terrain means MODIFY THE EXISTING TERRAIN.\n" +
+            "14. NEVER CREATE A NEW TERRAIN.\n" +
+            "15. NEVER DELETE OR REPLACE THE EXISTING TERRAIN.\n" +
+            "16. Unity owns tree IDs.\n" +
+            "17. Unity owns physical object placement logic.\n" +
+            "18. Use advice when the user asks for design guidance rather than an action.\n" +
+            "19. Advice may contain ONE suggestedCommand when there is one clear supported recommendation.\n" +
+            "20. If the user asks to apply previous advice, execute the previous supported recommendation.\n" +
+            "21. Use unknown when the requested capability does not exist.\n" +
+            "22. Do not invent functionality that Unity does not provide.\n" +
+            "23. Interpret natural language rather than requiring exact command wording.\n";
     }
 
 
@@ -4484,19 +3767,15 @@ public class DemoChat : MonoBehaviour
     // JSON EXTRACTION
     // =========================================================
 
-    private string ExtractJson(
-        string text
-    )
+    private string ExtractJson(string text)
     {
         if (string.IsNullOrEmpty(text))
         {
             return null;
         }
 
-
         text =
             text.Trim();
-
 
         text =
             Regex.Replace(
@@ -4506,7 +3785,6 @@ public class DemoChat : MonoBehaviour
                 RegexOptions.IgnoreCase
             );
 
-
         text =
             Regex.Replace(
                 text,
@@ -4515,14 +3793,11 @@ public class DemoChat : MonoBehaviour
                 RegexOptions.IgnoreCase
             );
 
-
         int start =
             text.IndexOf('{');
 
-
         int end =
             text.LastIndexOf('}');
-
 
         if (
             start < 0 ||
@@ -4531,7 +3806,6 @@ public class DemoChat : MonoBehaviour
         {
             return null;
         }
-
 
         return text.Substring(
             start,
@@ -4544,16 +3818,13 @@ public class DemoChat : MonoBehaviour
     // OUTPUT
     // =========================================================
 
-    private void SetOutput(
-        string message
-    )
+    private void SetOutput(string message)
     {
         if (outputText != null)
         {
             outputText.text =
                 message;
         }
-
 
         Debug.Log(
             "[DemoChat] " +
@@ -4566,9 +3837,7 @@ public class DemoChat : MonoBehaviour
     // BUTTON
     // =========================================================
 
-    private void SetButtonInteractable(
-        bool value
-    )
+    private void SetButtonInteractable(bool value)
     {
         if (sendButton != null)
         {
@@ -4583,19 +3852,13 @@ public class DemoChat : MonoBehaviour
     // =========================================================
 
     private void FinishRequest(
-        TaskCompletionSource<bool>
-            completionSource,
+        TaskCompletionSource<bool> completionSource,
         bool success
     )
     {
-        isGenerating =
-            false;
+        isGenerating = false;
 
-
-        SetButtonInteractable(
-            true
-        );
-
+        SetButtonInteractable(true);
 
         if (completionSource != null)
         {
@@ -4613,6 +3876,8 @@ public class DemoChat : MonoBehaviour
     [Serializable]
     private class SpatialContext
     {
+        // TREE
+
         public bool hasSelectedTree;
 
         public int selectedTreeIndex;
@@ -4621,9 +3886,25 @@ public class DemoChat : MonoBehaviour
 
         public string selectedTreeType;
 
+
+        // CURRENT POINTED TERRAIN POSITION
+
         public bool hasGroundPosition;
 
         public Vector3 groundPosition;
+    }
+
+
+    // =========================================================
+    // CONVERSATION TURN
+    // =========================================================
+
+    [Serializable]
+    private class ConversationTurn
+    {
+        public string userMessage;
+
+        public string assistantResult;
     }
 
 
@@ -4640,21 +3921,36 @@ public class DemoChat : MonoBehaviour
 
         public string reason;
 
+        // Used when commandType = advice.
+        public string assistantMessage;
+
+        // NEW:
+        // The single primary actionable recommendation
+        // associated with advice.
+        public LandscapeCommand suggestedCommand;
+
         public TerrainCommand terrain;
 
         public TreeCommand trees;
 
-        public CropCommand crops;
-
-        public EnvironmentCommand environment;
-
         public BuildingCommand building;
+
+        public WaterCommand water;
     }
 
 
     // =========================================================
-    // TERRAIN COMMAND
+    // WATER COMMAND
     // =========================================================
+
+    [Serializable]
+    private class WaterCommand
+    {
+        public string action;
+    }
+
+
+   
 
     [Serializable]
     private class TerrainCommand
@@ -4662,12 +3958,13 @@ public class DemoChat : MonoBehaviour
         public string action;
 
         public int count;
+
+        // Positive = taller, negative = shorter.
+        public float heightChange;
     }
 
 
-    // =========================================================
-    // TREE COMMAND
-    // =========================================================
+    
 
     [Serializable]
     private class TreeCommand
@@ -4685,42 +3982,6 @@ public class DemoChat : MonoBehaviour
         public float radius;
 
         public float spacing;
-    }
-
-
-    // =========================================================
-    // CROP COMMAND
-    // =========================================================
-
-    [Serializable]
-    private class CropCommand
-    {
-        public string action;
-
-        public string cropType;
-
-        public int count;
-
-        public float centerX;
-
-        public float centerZ;
-
-        public float radius;
-
-        public float spacing;
-    }
-
-
-    // =========================================================
-    // ENVIRONMENT COMMAND
-    // =========================================================
-
-    [Serializable]
-    private class EnvironmentCommand
-    {
-        public string action;
-
-        public float amount;
     }
 
 
@@ -4754,9 +4015,7 @@ public class DemoChat : MonoBehaviour
     }
 
 
-    // =========================================================
-    // OLLAMA RESPONSE
-    // =========================================================
+    
 
     [Serializable]
     private class OllamaResponse
@@ -4765,9 +4024,7 @@ public class DemoChat : MonoBehaviour
     }
 
 
-    // =========================================================
-    // OLLAMA MESSAGE
-    // =========================================================
+ 
 
     [Serializable]
     private class OllamaMessage
@@ -4778,9 +4035,7 @@ public class DemoChat : MonoBehaviour
     }
 
 
-    // =========================================================
-    // CLEANUP
-    // =========================================================
+   
 
     private void OnDestroy()
     {
