@@ -1,76 +1,8 @@
-﻿
+﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
 
-// ============================================================
-// TREE POINTING DETECTOR
-// ============================================================
-//
-// Behaviour:
-//
-// Point at Tree_3
-//      ↓
-// selectedTree = Tree_3
-//
-// Move ray to ground position A
-//      ↓
-// selectedTree = Tree_3
-// groundPosition = A
-//
-// Move ray to ground position B
-//      ↓
-// selectedTree = Tree_3
-// groundPosition = B
-//
-// Move ray to ground position C
-//      ↓
-// selectedTree = Tree_3
-// groundPosition = C
-//
-// Move ray to another object
-//      ↓
-// selectedTree = Tree_3
-// groundPosition = last ground position
-//
-// Move ray into empty space
-//      ↓
-// selectedTree = Tree_3
-// groundPosition = last ground position
-//
-// Say:
-//
-// "Move this tree over there."
-//
-// DemoChat receives:
-//
-// selectedTree
-// selectedTreeIndex
-// selectedTreeName
-// lastGroundPosition
-//
-// ============================================================
-//
-// IMPORTANT:
-//
-// selectedTree and pointedTree are DIFFERENT.
-//
-// pointedTree:
-//     What the ray is pointing at RIGHT NOW.
-//
-// selectedTree:
-//     The tree selected previously.
-//
-// selectedTree DOES NOT become null when the ray moves away.
-//
-// groundPosition:
-//     ALWAYS updates when the ray points at Terrain.
-//
-// Selection is ONLY cleared by:
-//
-// ClearSelection()
-// ClearAll()
-//
-// ============================================================
+
 
 public class TreePointingDetector : MonoBehaviour
 {
@@ -119,6 +51,42 @@ public class TreePointingDetector : MonoBehaviour
     [SerializeField]
     private bool debugTreeSelection = true;
 
+
+    // =========================================================
+    // DISTANT TREE SELECTION ASSIST
+    // =========================================================
+    //
+    // A distant tree covers only a few pixels, so the ray often
+    // passes it and hits the terrain behind it. When the ray does
+    // not hit a tree directly, the assist checks for a tree inside
+    // a narrow cone around the ray. Because the cone has a fixed
+    // ANGLE, the selection area grows with distance.
+    //
+    // The assist is used only for trees further away than
+    // assistMinDistance, so near selection is unchanged.
+    //
+    // =========================================================
+
+    [Header("Distant Tree Selection Assist")]
+
+    [Tooltip("Turn the assist on or off.")]
+    [SerializeField]
+    private bool useDistantSelectionAssist = true;
+
+    [Tooltip("Half-angle of the selection cone around the ray, in degrees.")]
+    [SerializeField]
+    private float assistConeAngle = 1.5f;
+
+    [Tooltip("Only trees further away than this (metres) can be selected by the assist.")]
+    [SerializeField]
+    private float assistMinDistance = 60f;
+
+    [Tooltip("How often (seconds) the list of trees in the scene is refreshed.")]
+    [SerializeField]
+    private float treeListRefreshInterval = 1f;
+
+    private readonly List<TreeSelectable> allTrees = new List<TreeSelectable>();
+    private float nextTreeListRefresh;
 
     // Used only to avoid repeated logs
     private bool wasPointingAtGround;
@@ -205,27 +173,7 @@ public class TreePointingDetector : MonoBehaviour
             // CURRENTLY POINTING AT TREE
             // -------------------------------------------------
 
-            pointedTree = tree;
-
-
-            // -------------------------------------------------
-            // SELECT TREE
-            // -------------------------------------------------
-
-            if (selectedTree != tree)
-            {
-                selectedTree = tree;
-
-                if (debugTreeSelection)
-                {
-                    Debug.Log(
-                        "[TreePointingDetector] Selected: " +
-                        selectedTree.GetTreeName() +
-                        " | ID=" +
-                        selectedTree.treeIndex
-                    );
-                }
-            }
+            SelectPointedTree(tree, false);
 
 
             wasPointingAtGround = false;
@@ -256,6 +204,29 @@ public class TreePointingDetector : MonoBehaviour
 
         if (terrain != null)
         {
+            // =================================================
+            // DISTANT TREE ASSIST
+            // =================================================
+            //
+            // The ray hit the terrain. If a distant tree lies
+            // inside the selection cone in front of the hit
+            // point, treat it as the pointed tree.
+            //
+            // =================================================
+
+            TreeSelectable assisted =
+                FindTreeInCone(hit.distance);
+
+            if (assisted != null)
+            {
+                SelectPointedTree(assisted, true);
+
+                wasPointingAtGround = false;
+
+                return;
+            }
+
+
             // =================================================
             // ALWAYS UPDATE GROUND POSITION
             // =================================================
@@ -345,6 +316,120 @@ public class TreePointingDetector : MonoBehaviour
         // =====================================================
 
         wasPointingAtGround = false;
+    }
+
+
+    // =========================================================
+    // SELECT POINTED TREE
+    // =========================================================
+
+    private void SelectPointedTree(TreeSelectable tree, bool assisted)
+    {
+        pointedTree = tree;
+
+        if (selectedTree != tree)
+        {
+            selectedTree = tree;
+
+            if (debugTreeSelection)
+            {
+                Debug.Log(
+                    "[TreePointingDetector] Selected: " +
+                    selectedTree.GetTreeName() +
+                    " | ID=" +
+                    selectedTree.treeIndex +
+                    (assisted ? " | assisted (distant tree)" : "")
+                );
+            }
+        }
+    }
+
+
+    // =========================================================
+    // FIND A DISTANT TREE INSIDE THE SELECTION CONE
+    // =========================================================
+    //
+    // Returns the tree whose centre is closest in angle to the
+    // ray, provided that:
+    //   - the angle is within assistConeAngle,
+    //   - the tree is further than assistMinDistance,
+    //   - the tree is not behind the terrain hit point.
+    //
+    // =========================================================
+
+    private TreeSelectable FindTreeInCone(float hitDistance)
+    {
+        if (!useDistantSelectionAssist || rayInteractor == null)
+            return null;
+
+        RefreshTreeList();
+
+        Transform origin =
+            rayInteractor.rayOriginTransform != null
+                ? rayInteractor.rayOriginTransform
+                : rayInteractor.transform;
+
+        Vector3 rayStart = origin.position;
+        Vector3 rayDir = origin.forward;
+
+        TreeSelectable best = null;
+        float bestAngle = assistConeAngle;
+
+        foreach (TreeSelectable t in allTrees)
+        {
+            if (t == null || !t.isActiveAndEnabled)
+                continue;
+
+            Vector3 centre = GetTreeCentre(t);
+            Vector3 toTree = centre - rayStart;
+            float distance = toTree.magnitude;
+
+            if (distance < assistMinDistance)
+                continue;
+
+            // Ignore trees behind the point where the ray hit the terrain
+            if (distance > hitDistance + 5f)
+                continue;
+
+            float angle = Vector3.Angle(rayDir, toTree);
+
+            if (angle < bestAngle)
+            {
+                bestAngle = angle;
+                best = t;
+            }
+        }
+
+        return best;
+    }
+
+
+    private Vector3 GetTreeCentre(TreeSelectable tree)
+    {
+        Collider col = tree.GetComponentInChildren<Collider>();
+
+        if (col != null)
+            return col.bounds.center;
+
+        Renderer rend = tree.GetComponentInChildren<Renderer>();
+
+        if (rend != null)
+            return rend.bounds.center;
+
+        return tree.transform.position;
+    }
+
+
+    private void RefreshTreeList()
+    {
+        if (Time.time < nextTreeListRefresh)
+            return;
+
+        nextTreeListRefresh = Time.time + treeListRefreshInterval;
+
+        allTrees.Clear();
+        allTrees.AddRange(
+            FindObjectsByType<TreeSelectable>(FindObjectsSortMode.None));
     }
 
 
@@ -586,4 +671,3 @@ public class TreePointingDetector : MonoBehaviour
             ground;
     }
 }
-

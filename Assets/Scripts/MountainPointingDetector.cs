@@ -1,180 +1,64 @@
 ﻿using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
+using System.Collections.Generic;
+using UnityEngine.InputSystem;
 
-// ============================================================
-// ENVIRONMENT MANAGER
-// ============================================================
-//
-// Controls the appearance of the dynamically generated
-// Unity Terrain.
-//
-// Responsibilities:
-//
-// - Automatically find TerrainGenerator
-// - Automatically find generated Terrain
-// - Make terrain greener
-// - Make terrain less green
-// - Make environment brighter
-// - Make environment darker
-// - Make environment warmer
-// - Make environment cooler
-// - Stronger shadows
-// - Softer shadows
-// - Add fog
-// - Remove fog
-// - Reset environment
-//
-// IMPORTANT
-// ----------
-//
-// Terrain is generated dynamically.
-//
-// Therefore this script does NOT require a Terrain
-// to exist when the scene starts.
-//
-// It repeatedly checks:
-//
-// EnvironmentManager
-//       ↓
-// TerrainGenerator
-//       ↓
-// GetGeneratedTerrain()
-//       ↓
-// Generated Terrain
-//
-// ============================================================
-
-public class EnvironmentManager : MonoBehaviour
+public class MountainPointingDetector : MonoBehaviour
 {
-    // =========================================================
-    // TERRAIN GENERATOR
-    // =========================================================
+    [Header("XR Ray")]
+    [SerializeField] private XRRayInteractor rayInteractor;
 
-    [Header("Terrain Generator")]
+    [Header("Terrain")]
+    [SerializeField] private TerrainGenerator terrainGenerator;
 
+    [Header("Mountain Detection")]
+    [Tooltip("Minimum local terrain relief required before a terrain hit is considered to be on a mountain.")]
+    [SerializeField] private float minimumMountainRelief = 1.0f;
+
+    [Tooltip("Distance around the ray hit used to examine local terrain relief.")]
+    [SerializeField] private float reliefSampleDistance = 4.0f;
+
+    [Tooltip("Number of surrounding terrain samples used for relief detection.")]
     [SerializeField]
-    private TerrainGenerator terrainGenerator;
+    [Range(4, 16)]
+    private int reliefSampleCount = 8;
+
+    [Tooltip("If enabled, terrain relief must pass the minimum threshold.")]
+    [SerializeField] private bool requireTerrainRelief = true;
+
+    [Tooltip("Seconds the selection is kept after the ray leaves the mountain. Set to a negative value to keep it forever (Round 1 behaviour).")]
+    [SerializeField] private float selectionHoldTime = 1.5f;
+
+    [Tooltip("Allows a mountain to be detected close to its footprint edge.")]
+    [SerializeField] private float edgeTolerance = 1.0f;
+
+    [Header("Debug")]
+    [SerializeField] private bool debugSelection = true;
 
 
     // =========================================================
-    // CURRENT GENERATED TERRAIN
+    // CURRENT POINTING STATE
     // =========================================================
 
-    [Header("Runtime Terrain")]
-
-    [SerializeField]
-    private Terrain terrain;
+    private int pointedMountainId = -1;
+    private bool isPointingAtMountain = false;
 
 
     // =========================================================
-    // TERRAIN LAYER
+    // SELECTED MOUNTAIN STATE
     // =========================================================
 
-    [Header("Terrain Appearance")]
-
-    [Tooltip(
-        "Colour applied to the generated terrain surface."
-    )]
-    [SerializeField]
-    private Color baseTerrainColor =
-        new Color(
-            0.45f,
-            0.55f,
-            0.30f,
-            1f
-        );
+    private int selectedMountainId = -1;
+    private bool hasSelectedMountain = false;
+    private float lastTimeOnMountain = -1f;
 
 
     // =========================================================
-    // CURRENT GREEN AMOUNT
+    // LAST HIT POINT
     // =========================================================
 
-    [SerializeField]
-    private float greenAmount = 0f;
-
-
-    // =========================================================
-    // BRIGHTNESS
-    // =========================================================
-
-    [Header("Brightness")]
-
-    [SerializeField]
-    private float brightness = 1f;
-
-
-    // =========================================================
-    // WARMTH
-    // =========================================================
-
-    [Header("Warmth")]
-
-    [SerializeField]
-    private float warmth = 0f;
-
-
-    // =========================================================
-    // SUN
-    // =========================================================
-
-    [Header("Sun / Directional Light")]
-
-    [SerializeField]
-    private Light sunLight;
-
-
-    // =========================================================
-    // ORIGINAL SUN VALUES
-    // =========================================================
-
-    private float originalSunIntensity = 1f;
-
-    private Color originalSunColor =
-        Color.white;
-
-    private Quaternion originalSunRotation =
-        Quaternion.identity;
-
-    private LightShadows originalShadowType =
-        LightShadows.Soft;
-
-    private float originalShadowStrength =
-        1f;
-
-    private bool originalSunCaptured =
-        false;
-
-
-    // =========================================================
-    // ORIGINAL TERRAIN LAYERS
-    // =========================================================
-
-    private TerrainLayer[] originalTerrainLayers;
-
-    private bool originalTerrainCaptured =
-        false;
-
-
-    // =========================================================
-    // LIMITS
-    // =========================================================
-
-    private const float MIN_GREEN =
-        -1f;
-
-    private const float MAX_GREEN =
-        1f;
-
-    private const float MIN_BRIGHTNESS =
-        0.3f;
-
-    private const float MAX_BRIGHTNESS =
-        2f;
-
-    private const float MIN_WARMTH =
-        -1f;
-
-    private const float MAX_WARMTH =
-        1f;
+    private Vector3 lastMountainHitPoint;
+    private bool hasMountainHitPoint = false;
 
 
     // =========================================================
@@ -183,283 +67,795 @@ public class EnvironmentManager : MonoBehaviour
 
     private void Start()
     {
-        Debug.Log(
-            "[EnvironmentManager] Starting."
-        );
+        ClearSelection();
 
-        FindTerrainGenerator();
+        pointedMountainId = -1;
+        isPointingAtMountain = false;
 
-        FindSun();
-
-        CaptureSunOriginalValues();
-
-        // Terrain may not exist yet.
-        //
-        // Try once immediately.
-        RefreshTerrain();
-
-        Debug.Log(
-            "[EnvironmentManager] Start complete."
-        );
+        hasMountainHitPoint = false;
+        lastMountainHitPoint = Vector3.zero;
     }
 
 
     // =========================================================
     // UPDATE
     // =========================================================
-    //
-    // IMPORTANT
-    //
-    // TerrainGenerator may generate terrain AFTER
-    // EnvironmentManager.Start().
-    //
-    // Therefore we check for it continuously.
-    //
-    // =========================================================
 
     private void Update()
     {
-        Terrain generatedTerrain =
-            GetTerrain();
+        DetectMountain();
+        ReleaseStaleSelection();
+        ValidateSelectedMountain();
 
-        if (generatedTerrain == null)
+        // Diagnostic: press M while pointing to explain the detection result.
+        if (Keyboard.current != null && Keyboard.current.mKey.wasPressedThisFrame)
+            DiagnoseCurrentHit();
+    }
+
+
+    // =========================================================
+    // DIAGNOSTIC (press M)
+    // =========================================================
+
+    private void DiagnoseCurrentHit()
+    {
+        string prefix = "[MountainPointingDetector] DIAGNOSE: ";
+
+        if (rayInteractor == null || terrainGenerator == null)
         {
+            Debug.Log(prefix + "rayInteractor or terrainGenerator is NOT assigned in the Inspector.");
             return;
         }
 
+        if (!rayInteractor.TryGetCurrent3DRaycastHit(out RaycastHit hit))
+        {
+            Debug.Log(prefix + "the ray is not hitting anything.");
+            return;
+        }
+
+        Terrain terrain = hit.collider.GetComponent<Terrain>();
+        if (terrain == null)
+            terrain = hit.collider.GetComponentInParent<Terrain>();
+
+        if (terrain == null)
+        {
+            Debug.Log(prefix + "the ray hits '" + hit.collider.name + "', which is not a Terrain.");
+            return;
+        }
+
+        Terrain targetTerrain = terrainGenerator.GetTargetTerrain();
+        Terrain generatedTerrain = terrainGenerator.GetGeneratedTerrain();
+
+        if (targetTerrain != null && terrain != targetTerrain && terrain != generatedTerrain)
+        {
+            Debug.Log(prefix + "the ray hits terrain '" + terrain.name +
+                      "', which is not the TerrainGenerator's terrain.");
+            return;
+        }
+
+        List<TerrainGenerator.MountainInfo> mountains = terrainGenerator.GetGeneratedMountains();
+        int count = mountains == null ? 0 : mountains.Count;
+
+        Debug.Log(prefix + "hit terrain at distance " + hit.distance.ToString("F1") +
+                  " m. Recorded mountains: " + count +
+                  (hasSelectedMountain ? " | currently selected ID = " + selectedMountainId : " | nothing selected"));
+
+        if (count == 0)
+        {
+            Debug.Log(prefix + "NO mountains are recorded. Only mountains created by the system " +
+                      "(\"create a mountain\") can be selected.");
+            return;
+        }
+
+        Vector3 local = terrain.transform.InverseTransformPoint(hit.point);
+        Vector2 hitPos = new Vector2(local.x, local.z);
+
+        foreach (TerrainGenerator.MountainInfo m in mountains)
+        {
+            if (m == null) continue;
+
+            float distance = Vector2.Distance(hitPos, new Vector2(m.terrainPosition.x, m.terrainPosition.y));
+            float allowed = m.radius + edgeTolerance;
+            float relief = CalculateLocalRelief(hit.point, terrain, m.radius);
+
+            string verdict =
+                distance > allowed ? "OUTSIDE footprint" :
+                (requireTerrainRelief && relief < minimumMountainRelief) ? "inside footprint but relief too LOW" :
+                "OK (should be selectable)";
+
+            Debug.Log(prefix + "ID " + m.id + " '" + m.name + "': distance to centre " +
+                      distance.ToString("F1") + " m (allowed " + allowed.ToString("F1") +
+                      "), relief " + relief.ToString("F2") + " m (minimum " +
+                      minimumMountainRelief.ToString("F2") + ") -> " + verdict);
+        }
+    }
+
+
+    // =========================================================
+    // DETECT MOUNTAIN
+    // =========================================================
+
+    private void DetectMountain()
+    {
+        // Reset current pointing state every frame.
+        pointedMountainId = -1;
+        isPointingAtMountain = false;
+
+        if (rayInteractor == null)
+            return;
+
+        if (terrainGenerator == null)
+            return;
+
+
         // -----------------------------------------------------
-        // If TerrainGenerator generated a new Terrain,
-        // automatically reconnect.
+        // Get current XR raycast hit
         // -----------------------------------------------------
 
-        if (terrain != generatedTerrain)
+        RaycastHit hit;
+
+        if (!rayInteractor.TryGetCurrent3DRaycastHit(out hit))
+            return;
+
+
+        // -----------------------------------------------------
+        // Find Terrain from collider
+        // -----------------------------------------------------
+
+        Terrain terrain =
+            hit.collider.GetComponent<Terrain>();
+
+        if (terrain == null)
         {
             terrain =
-                generatedTerrain;
+                hit.collider.GetComponentInParent<Terrain>();
+        }
 
-            originalTerrainCaptured =
-                false;
+        if (terrain == null)
+            return;
 
-            CaptureOriginalTerrainLayers();
 
-            Debug.Log(
-                "[EnvironmentManager] " +
-                "New generated terrain detected: " +
-                terrain.name
+        // -----------------------------------------------------
+        // Check that this is one of our terrains
+        // -----------------------------------------------------
+
+        Terrain targetTerrain =
+            terrainGenerator.GetTargetTerrain();
+
+        Terrain generatedTerrain =
+            terrainGenerator.GetGeneratedTerrain();
+
+        if (targetTerrain != null &&
+            terrain != targetTerrain &&
+            terrain != generatedTerrain)
+        {
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // Find mountain at hit position
+        // -----------------------------------------------------
+
+        TerrainGenerator.MountainInfo mountain =
+            FindMountainAtWorldPosition(
+                hit.point,
+                terrain
             );
 
-            ApplyCurrentEnvironment();
+        if (mountain == null)
+            return;
+
+
+        // -----------------------------------------------------
+        // Mountain detected
+        // -----------------------------------------------------
+
+        pointedMountainId =
+            mountain.id;
+
+        isPointingAtMountain =
+            true;
+
+        lastTimeOnMountain =
+            Time.time;
+
+
+        // Save last hit position.
+        lastMountainHitPoint =
+            hit.point;
+
+        hasMountainHitPoint =
+            true;
+
+
+        // -----------------------------------------------------
+        // Select mountain
+        // -----------------------------------------------------
+
+        if (!hasSelectedMountain ||
+            selectedMountainId != pointedMountainId)
+        {
+            selectedMountainId =
+                pointedMountainId;
+
+            hasSelectedMountain =
+                true;
+
+
+            if (debugSelection)
+            {
+                Debug.Log(
+                    "[MountainPointingDetector] " +
+                    "Selected Mountain ID = " +
+                    selectedMountainId +
+                    " | Name = " +
+                    mountain.name
+                );
+            }
         }
     }
 
 
     // =========================================================
-    // FIND TERRAIN GENERATOR
+    // FIND MOUNTAIN AT WORLD POSITION
     // =========================================================
 
-    private void FindTerrainGenerator()
+    private TerrainGenerator.MountainInfo
+        FindMountainAtWorldPosition(
+            Vector3 worldPosition,
+            Terrain terrain)
     {
-        if (terrainGenerator != null)
+        if (terrain == null)
+            return null;
+
+
+        // -----------------------------------------------------
+        // Get saved/generated mountains
+        // -----------------------------------------------------
+
+        List<TerrainGenerator.MountainInfo> mountains =
+            terrainGenerator.GetGeneratedMountains();
+
+        if (mountains == null ||
+            mountains.Count == 0)
         {
-            return;
+            return null;
         }
 
-        terrainGenerator =
-            FindFirstObjectByType<TerrainGenerator>();
 
-        if (terrainGenerator != null)
-        {
-            Debug.Log(
-                "[EnvironmentManager] " +
-                "TerrainGenerator found: " +
-                terrainGenerator.name
-            );
-        }
-        else
-        {
-            Debug.LogWarning(
-                "[EnvironmentManager] " +
-                "TerrainGenerator not found."
-            );
-        }
-    }
+        // -----------------------------------------------------
+        // Terrain data
+        // -----------------------------------------------------
+
+        TerrainData terrainData =
+            terrain.terrainData;
+
+        if (terrainData == null)
+            return null;
 
 
-    // =========================================================
-    // FIND SUN
-    // =========================================================
+        // -----------------------------------------------------
+        // Convert world position to terrain local position
+        // -----------------------------------------------------
 
-    private void FindSun()
-    {
-        if (sunLight != null)
-        {
-            return;
-        }
-
-        Light[] lights =
-            FindObjectsByType<Light>(
-                FindObjectsInactive.Exclude,
-                FindObjectsSortMode.None
+        Vector3 localPosition =
+            terrain.transform.InverseTransformPoint(
+                worldPosition
             );
 
-        foreach (Light light in lights)
+
+        TerrainGenerator.MountainInfo bestMountain =
+            null;
+
+        float bestScore =
+            float.MinValue;
+
+
+        // =====================================================
+        // CHECK EVERY MOUNTAIN
+        // =====================================================
+
+        foreach (
+            TerrainGenerator.MountainInfo mountain
+            in mountains)
         {
-            if (light == null)
+            if (mountain == null)
+                continue;
+
+
+            // -------------------------------------------------
+            // Mountain centre
+            //
+            // IMPORTANT:
+            // terrainPosition is already stored in LOCAL
+            // METRES.
+            //
+            // Do NOT multiply by TerrainData.size.
+            // -------------------------------------------------
+
+            Vector2 mountainCenter =
+                new Vector2(
+                    mountain.terrainPosition.x,
+                    mountain.terrainPosition.y
+                );
+
+
+            // -------------------------------------------------
+            // Hit position
+            // -------------------------------------------------
+
+            Vector2 hitPosition =
+                new Vector2(
+                    localPosition.x,
+                    localPosition.z
+                );
+
+
+            // -------------------------------------------------
+            // Distance from mountain centre
+            // -------------------------------------------------
+
+            float distance =
+                Vector2.Distance(
+                    hitPosition,
+                    mountainCenter
+                );
+
+
+            // -------------------------------------------------
+            // Allowed radius
+            // -------------------------------------------------
+
+            float allowedRadius =
+                mountain.radius +
+                edgeTolerance;
+
+
+            if (distance > allowedRadius)
+                continue;
+
+
+            // -------------------------------------------------
+            // Calculate local terrain relief
+            // -------------------------------------------------
+
+            float relief =
+                CalculateLocalRelief(
+                    worldPosition,
+                    terrain,
+                    mountain.radius
+                );
+
+
+            // -------------------------------------------------
+            // Check relief requirement
+            // -------------------------------------------------
+
+            if (requireTerrainRelief &&
+                relief < minimumMountainRelief)
             {
                 continue;
             }
 
-            if (light.type ==
-                LightType.Directional)
-            {
-                sunLight =
-                    light;
 
-                Debug.Log(
-                    "[EnvironmentManager] " +
-                    "Directional light found: " +
-                    light.name
+            // -------------------------------------------------
+            // Distance score
+            // -------------------------------------------------
+
+            float normalizedDistance =
+                mountain.radius > 0.01f
+                    ? distance / mountain.radius
+                    : 1f;
+
+            normalizedDistance =
+                Mathf.Clamp01(
+                    normalizedDistance
                 );
 
-                return;
+
+            float distanceScore =
+                1f -
+                normalizedDistance;
+
+
+            // -------------------------------------------------
+            // Relief score
+            // -------------------------------------------------
+
+            float reliefScore =
+                Mathf.Clamp01(
+                    relief /
+                    Mathf.Max(
+                        minimumMountainRelief * 4f,
+                        0.01f
+                    )
+                );
+
+
+            // -------------------------------------------------
+            // Combined score
+            // -------------------------------------------------
+
+            float score =
+                distanceScore * 0.35f +
+                reliefScore * 0.65f;
+
+
+            // -------------------------------------------------
+            // Best mountain
+            // -------------------------------------------------
+
+            if (score > bestScore)
+            {
+                bestScore =
+                    score;
+
+                bestMountain =
+                    mountain;
             }
         }
 
-        Debug.LogWarning(
-            "[EnvironmentManager] " +
-            "No directional light found."
+
+        return bestMountain;
+    }
+
+
+    // =========================================================
+    // CALCULATE LOCAL TERRAIN RELIEF
+    // =========================================================
+
+    private float CalculateLocalRelief(
+        Vector3 worldPosition,
+        Terrain terrain,
+        float mountainRadius)
+    {
+        if (terrain == null)
+            return 0f;
+
+
+        TerrainData terrainData =
+            terrain.terrainData;
+
+        if (terrainData == null)
+            return 0f;
+
+
+        // -----------------------------------------------------
+        // Height at ray hit
+        // -----------------------------------------------------
+
+        float hitHeight =
+            terrain.SampleHeight(
+                worldPosition
+            ) +
+            terrain.transform.position.y;
+
+
+        // -----------------------------------------------------
+        // Determine sampling distance
+        // -----------------------------------------------------
+
+        float sampleDistance =
+            reliefSampleDistance;
+
+
+        if (mountainRadius > 0f)
+        {
+            sampleDistance =
+                Mathf.Min(
+                    sampleDistance,
+                    Mathf.Max(
+                        mountainRadius * 0.25f,
+                        1f
+                    )
+                );
+        }
+
+
+        sampleDistance =
+            Mathf.Max(
+                sampleDistance,
+                0.5f
+            );
+
+
+        // -----------------------------------------------------
+        // Number of surrounding samples
+        // -----------------------------------------------------
+
+        int samples =
+            Mathf.Max(
+                reliefSampleCount,
+                4
+            );
+
+
+        float totalHeight =
+            0f;
+
+        float minimumHeight =
+            float.MaxValue;
+
+
+        // IMPORTANT:
+        // Count only samples that are actually inside
+        // the terrain.
+        int validSampleCount =
+            0;
+
+
+        // =====================================================
+        // SAMPLE SURROUNDING TERRAIN
+        // =====================================================
+
+        for (int i = 0; i < samples; i++)
+        {
+            float angle =
+                (360f / samples) * i;
+
+            float radians =
+                angle * Mathf.Deg2Rad;
+
+
+            Vector3 offset =
+                new Vector3(
+                    Mathf.Cos(radians) *
+                    sampleDistance,
+
+                    0f,
+
+                    Mathf.Sin(radians) *
+                    sampleDistance
+                );
+
+
+            Vector3 sampleWorld =
+                worldPosition +
+                offset;
+
+
+            // -------------------------------------------------
+            // Convert sample to local terrain coordinates
+            // -------------------------------------------------
+
+            Vector3 sampleLocal =
+                terrain.transform.InverseTransformPoint(
+                    sampleWorld
+                );
+
+
+            // -------------------------------------------------
+            // Ignore samples outside terrain
+            // -------------------------------------------------
+
+            if (sampleLocal.x < 0f ||
+                sampleLocal.z < 0f ||
+                sampleLocal.x > terrainData.size.x ||
+                sampleLocal.z > terrainData.size.z)
+            {
+                continue;
+            }
+
+
+            // -------------------------------------------------
+            // Get terrain height
+            // -------------------------------------------------
+
+            float sampleHeight =
+                terrain.SampleHeight(
+                    sampleWorld
+                ) +
+                terrain.transform.position.y;
+
+
+            totalHeight +=
+                sampleHeight;
+
+
+            if (sampleHeight < minimumHeight)
+            {
+                minimumHeight =
+                    sampleHeight;
+            }
+
+
+            // -------------------------------------------------
+            // Count valid sample
+            // -------------------------------------------------
+
+            validSampleCount++;
+        }
+
+
+        // -----------------------------------------------------
+        // No valid samples
+        // -----------------------------------------------------
+
+        if (validSampleCount == 0)
+            return 0f;
+
+
+        // -----------------------------------------------------
+        // Average surrounding height
+        // -----------------------------------------------------
+
+        float averageHeight =
+            totalHeight /
+            validSampleCount;
+
+
+        // -----------------------------------------------------
+        // Calculate relief
+        // -----------------------------------------------------
+
+        float averageRelief =
+            hitHeight -
+            averageHeight;
+
+
+        float minimumRelief =
+            hitHeight -
+            minimumHeight;
+
+
+        // -----------------------------------------------------
+        // Return stronger of the two measurements
+        // -----------------------------------------------------
+
+        return Mathf.Max(
+            averageRelief,
+            minimumRelief * 0.5f
         );
     }
 
 
     // =========================================================
-    // REFRESH TERRAIN
+    // RELEASE STALE SELECTION (Round 2)
     // =========================================================
 
-    private void RefreshTerrain()
+    // In Round 1 a mountain stayed selected after the ray moved away,
+    // so "make this mountain taller" changed a mountain that was no
+    // longer pointed at. The selection is now kept only briefly, which
+    // still allows small hand movements while speaking.
+    private void ReleaseStaleSelection()
     {
-        Terrain currentTerrain =
-            GetTerrain();
+        if (!hasSelectedMountain || isPointingAtMountain || selectionHoldTime < 0f)
+            return;
 
-        if (currentTerrain == null)
+        if (Time.time - lastTimeOnMountain < selectionHoldTime)
+            return;
+
+        if (debugSelection)
         {
             Debug.Log(
-                "[EnvironmentManager] " +
-                "Terrain not generated yet."
+                "[MountainPointingDetector] Ray left mountain ID " +
+                selectedMountainId +
+                " for " + selectionHoldTime.ToString("F1") +
+                " s. Selection cleared."
             );
-
-            return;
         }
 
-        if (terrain != currentTerrain)
-        {
-            terrain =
-                currentTerrain;
-
-            originalTerrainCaptured =
-                false;
-
-            CaptureOriginalTerrainLayers();
-        }
-
-        ApplyCurrentEnvironment();
+        ClearSelection();
     }
 
 
     // =========================================================
-    // GET TERRAIN
-    // =========================================================
-    //
-    // Priority:
-    //
-    // 1. TerrainGenerator
-    // 2. Assigned Terrain
-    // 3. Terrain.activeTerrain
-    // 4. Scene search
-    //
+    // VALIDATE SELECTED MOUNTAIN
     // =========================================================
 
-    private Terrain GetTerrain()
+    private void ValidateSelectedMountain()
     {
-        // -----------------------------------------------------
-        // TERRAIN GENERATOR
-        // -----------------------------------------------------
+        if (!hasSelectedMountain)
+            return;
 
         if (terrainGenerator == null)
-        {
-            FindTerrainGenerator();
-        }
+            return;
 
-        if (terrainGenerator != null)
-        {
-            Terrain generatedTerrain =
-                terrainGenerator.GetGeneratedTerrain();
 
-            if (
-                generatedTerrain != null &&
-                generatedTerrain.terrainData != null
-            )
+        // -----------------------------------------------------
+        // Check whether selected mountain still exists
+        // -----------------------------------------------------
+
+        if (!terrainGenerator.HasMountain(
+                selectedMountainId))
+        {
+            if (debugSelection)
             {
-                return generatedTerrain;
+                Debug.Log(
+                    "[MountainPointingDetector] " +
+                    "Selected mountain ID " +
+                    selectedMountainId +
+                    " no longer exists. " +
+                    "Selection cleared."
+                );
             }
+
+
+            ClearSelection();
         }
+    }
 
 
-        // -----------------------------------------------------
-        // ASSIGNED TERRAIN
-        // -----------------------------------------------------
+    // =========================================================
+    // PUBLIC: CURRENT POINTING
+    // =========================================================
 
-        if (
-            terrain != null &&
-            terrain.terrainData != null
-        )
+    public bool IsPointingAtMountain()
+    {
+        return isPointingAtMountain;
+    }
+
+
+    public int GetPointedMountainId()
+    {
+        return pointedMountainId;
+    }
+
+
+    public bool TryGetPointedMountainId(
+        out int mountainId)
+    {
+        mountainId =
+            pointedMountainId;
+
+        return
+            isPointingAtMountain &&
+            pointedMountainId >= 0;
+    }
+
+
+    // =========================================================
+    // PUBLIC: SELECTED MOUNTAIN
+    // =========================================================
+
+    public int GetSelectedMountainId()
+    {
+        if (!hasSelectedMountain)
+            return -1;
+
+        return selectedMountainId;
+    }
+
+
+    public bool TryGetSelectedMountainId(
+        out int mountainId)
+    {
+        mountainId =
+            selectedMountainId;
+
+        return
+            hasSelectedMountain &&
+            selectedMountainId >= 0;
+    }
+
+
+    public bool HasSelectedMountain()
+    {
+        return
+            hasSelectedMountain &&
+            selectedMountainId >= 0;
+    }
+
+
+    public TerrainGenerator.MountainInfo
+        GetSelectedMountain()
+    {
+        if (!hasSelectedMountain)
+            return null;
+
+        if (terrainGenerator == null)
+            return null;
+
+
+        TerrainGenerator.MountainInfo mountain;
+
+
+        if (terrainGenerator.TryGetMountainById(
+                selectedMountainId,
+                out mountain))
         {
-            return terrain;
-        }
-
-
-        // -----------------------------------------------------
-        // ACTIVE TERRAIN
-        // -----------------------------------------------------
-
-        Terrain activeTerrain =
-            Terrain.activeTerrain;
-
-        if (
-            activeTerrain != null &&
-            activeTerrain.terrainData != null
-        )
-        {
-            return activeTerrain;
-        }
-
-
-        // -----------------------------------------------------
-        // SEARCH SCENE
-        // -----------------------------------------------------
-
-        Terrain[] terrains =
-            FindObjectsByType<Terrain>(
-                FindObjectsInactive.Exclude,
-                FindObjectsSortMode.None
-            );
-
-        if (terrains != null)
-        {
-            foreach (
-                Terrain foundTerrain
-                in terrains
-            )
-            {
-                if (
-                    foundTerrain != null &&
-                    foundTerrain.terrainData != null &&
-                    foundTerrain.gameObject.activeInHierarchy
-                )
-                {
-                    return foundTerrain;
-                }
-            }
+            return mountain;
         }
 
 
@@ -468,1039 +864,82 @@ public class EnvironmentManager : MonoBehaviour
 
 
     // =========================================================
-    // CAPTURE ORIGINAL TERRAIN LAYERS
+    // CLEAR SELECTION
     // =========================================================
 
-    private void CaptureOriginalTerrainLayers()
+    public void ClearSelection()
     {
-        Terrain currentTerrain =
-            GetTerrain();
+        selectedMountainId =
+            -1;
 
-        if (currentTerrain == null)
-        {
-            return;
-        }
-
-        TerrainData data =
-            currentTerrain.terrainData;
-
-        if (data == null)
-        {
-            return;
-        }
-
-
-        TerrainLayer[] layers =
-            data.terrainLayers;
-
-        if (
-            layers == null ||
-            layers.Length == 0
-        )
-        {
-            Debug.Log(
-                "[EnvironmentManager] " +
-                "Terrain has no TerrainLayers. " +
-                "Creating one."
-            );
-
-            CreateTerrainLayer();
-
-            layers =
-                data.terrainLayers;
-        }
-
-
-        if (
-            layers != null &&
-            layers.Length > 0
-        )
-        {
-            originalTerrainLayers =
-                new TerrainLayer[layers.Length];
-
-            for (
-                int i = 0;
-                i < layers.Length;
-                i++
-            )
-            {
-                originalTerrainLayers[i] =
-                    layers[i];
-            }
-
-            originalTerrainCaptured =
-                true;
-
-            Debug.Log(
-                "[EnvironmentManager] " +
-                "Captured " +
-                layers.Length +
-                " terrain layer(s)."
-            );
-        }
-    }
-
-
-    // =========================================================
-    // CREATE TERRAIN LAYER
-    // =========================================================
-    //
-    // Your TerrainGenerator currently does not create
-    // TerrainLayers.
-    //
-    // This creates one automatically at runtime.
-    //
-    // =========================================================
-
-    private void CreateTerrainLayer()
-    {
-        Terrain currentTerrain =
-            GetTerrain();
-
-        if (currentTerrain == null)
-        {
-            return;
-        }
-
-        TerrainData data =
-            currentTerrain.terrainData;
-
-        if (data == null)
-        {
-            return;
-        }
-
-
-        TerrainLayer layer =
-            new TerrainLayer();
-
-        layer.diffuseTexture =
-            CreateWhiteTexture();
-
-        layer.tileSize =
-            new Vector2(
-                20f,
-                20f
-            );
-
-        layer.tileOffset =
-            Vector2.zero;
-
-
-        data.terrainLayers =
-            new TerrainLayer[]
-            {
-                layer
-            };
-
-
-        Debug.Log(
-            "[EnvironmentManager] " +
-            "Created runtime TerrainLayer."
-        );
-    }
-
-
-    // =========================================================
-    // CREATE WHITE TEXTURE
-    // =========================================================
-    //
-    // A white texture allows the TerrainLayer colour to
-    // control the visible terrain colour.
-    //
-    // =========================================================
-
-    private Texture2D CreateWhiteTexture()
-    {
-        Texture2D texture =
-            new Texture2D(
-                2,
-                2,
-                TextureFormat.RGBA32,
-                false
-            );
-
-        texture.SetPixel(
-            0,
-            0,
-            Color.white
-        );
-
-        texture.SetPixel(
-            1,
-            0,
-            Color.white
-        );
-
-        texture.SetPixel(
-            0,
-            1,
-            Color.white
-        );
-
-        texture.SetPixel(
-            1,
-            1,
-            Color.white
-        );
-
-        texture.Apply();
-
-        return texture;
-    }
-
-
-    // =========================================================
-    // APPLY CURRENT ENVIRONMENT
-    // =========================================================
-
-    private void ApplyCurrentEnvironment()
-    {
-        ApplyTerrainGreen();
-
-        ApplyLighting();
-
-        ApplyEnvironmentTint();
-    }
-
-
-    // =========================================================
-    // PUBLIC ENVIRONMENT COMMAND
-    // =========================================================
-
-    public bool ApplyEnvironmentCommand(
-        string action,
-        float amount
-    )
-    {
-        if (
-            string.IsNullOrWhiteSpace(
-                action
-            )
-        )
-        {
-            return false;
-        }
-
-
-        action =
-            action.Trim()
-                  .ToLowerInvariant();
-
-
-        Debug.Log(
-            "[EnvironmentManager] " +
-            "Action = " +
-            action +
-            " | Amount = " +
-            amount
-        );
-
-
-        // =====================================================
-        // GREENER
-        // =====================================================
-
-        if (
-            action == "greener" ||
-            action == "more_green" ||
-            action == "make_green" ||
-            action == "increase_green"
-        )
-        {
-            float change =
-                amount <= 0f
-                    ? 0.20f
-                    : amount;
-
-            greenAmount =
-                Mathf.Clamp(
-                    greenAmount + change,
-                    MIN_GREEN,
-                    MAX_GREEN
-                );
-
-            ApplyTerrainGreen();
-
-            return true;
-        }
-
-
-        // =====================================================
-        // LESS GREEN
-        // =====================================================
-
-        if (
-            action == "less_green" ||
-            action == "reduce_green" ||
-            action == "less_greenery"
-        )
-        {
-            float change =
-                amount <= 0f
-                    ? 0.20f
-                    : amount;
-
-            greenAmount =
-                Mathf.Clamp(
-                    greenAmount - change,
-                    MIN_GREEN,
-                    MAX_GREEN
-                );
-
-            ApplyTerrainGreen();
-
-            return true;
-        }
-
-
-        // =====================================================
-        // BRIGHTER
-        // =====================================================
-
-        if (
-            action == "brighter" ||
-            action == "increase_brightness" ||
-            action == "more_light"
-        )
-        {
-            float change =
-                amount <= 0f
-                    ? 0.20f
-                    : amount;
-
-            brightness =
-                Mathf.Clamp(
-                    brightness + change,
-                    MIN_BRIGHTNESS,
-                    MAX_BRIGHTNESS
-                );
-
-            ApplyLighting();
-
-            return true;
-        }
-
-
-        // =====================================================
-        // DARKER
-        // =====================================================
-
-        if (
-            action == "darker" ||
-            action == "decrease_brightness" ||
-            action == "less_light"
-        )
-        {
-            float change =
-                amount <= 0f
-                    ? 0.20f
-                    : amount;
-
-            brightness =
-                Mathf.Clamp(
-                    brightness - change,
-                    MIN_BRIGHTNESS,
-                    MAX_BRIGHTNESS
-                );
-
-            ApplyLighting();
-
-            return true;
-        }
-
-
-        // =====================================================
-        // WARMER
-        // =====================================================
-
-        if (
-            action == "warmer" ||
-            action == "warm"
-        )
-        {
-            float change =
-                amount <= 0f
-                    ? 0.20f
-                    : amount;
-
-            warmth =
-                Mathf.Clamp(
-                    warmth + change,
-                    MIN_WARMTH,
-                    MAX_WARMTH
-                );
-
-            ApplyEnvironmentTint();
-
-            return true;
-        }
-
-
-        // =====================================================
-        // COOLER
-        // =====================================================
-
-        if (
-            action == "cooler" ||
-            action == "cool"
-        )
-        {
-            float change =
-                amount <= 0f
-                    ? 0.20f
-                    : amount;
-
-            warmth =
-                Mathf.Clamp(
-                    warmth - change,
-                    MIN_WARMTH,
-                    MAX_WARMTH
-                );
-
-            ApplyEnvironmentTint();
-
-            return true;
-        }
-
-
-        // =====================================================
-        // STRONGER SHADOWS
-        // =====================================================
-
-        if (
-            action == "stronger_shadows" ||
-            action == "more_shadows"
-        )
-        {
-            if (sunLight == null)
-            {
-                FindSun();
-            }
-
-            if (sunLight == null)
-            {
-                return false;
-            }
-
-            sunLight.shadows =
-                LightShadows.Soft;
-
-            sunLight.shadowStrength =
-                0.90f;
-
-            return true;
-        }
-
-
-        // =====================================================
-        // SOFTER SHADOWS
-        // =====================================================
-
-        if (
-            action == "softer_shadows" ||
-            action == "less_shadows"
-        )
-        {
-            if (sunLight == null)
-            {
-                FindSun();
-            }
-
-            if (sunLight == null)
-            {
-                return false;
-            }
-
-            sunLight.shadows =
-                LightShadows.Soft;
-
-            sunLight.shadowStrength =
-                0.35f;
-
-            return true;
-        }
-
-
-        // =====================================================
-        // ADD FOG
-        // =====================================================
-
-        if (
-            action == "add_fog" ||
-            action == "fog"
-        )
-        {
-            RenderSettings.fog =
-                true;
-
-            RenderSettings.fogMode =
-                FogMode.ExponentialSquared;
-
-            RenderSettings.fogDensity =
-                0.01f;
-
-            RenderSettings.fogColor =
-                new Color(
-                    0.75f,
-                    0.80f,
-                    0.85f
-                );
-
-            return true;
-        }
-
-
-        // =====================================================
-        // REMOVE FOG
-        // =====================================================
-
-        if (
-            action == "remove_fog" ||
-            action == "no_fog"
-        )
-        {
-            RenderSettings.fog =
-                false;
-
-            return true;
-        }
-
-
-        // =====================================================
-        // RESET
-        // =====================================================
-
-        if (
-            action == "reset" ||
-            action == "reset_environment"
-        )
-        {
-            ResetEnvironment();
-
-            return true;
-        }
-
-
-        Debug.LogWarning(
-            "[EnvironmentManager] " +
-            "Unknown action: " +
-            action
-        );
-
-        return false;
-    }
-
-
-    // =========================================================
-    // APPLY TERRAIN GREEN
-    // =========================================================
-
-    private void ApplyTerrainGreen()
-    {
-        Terrain currentTerrain =
-            GetTerrain();
-
-        if (currentTerrain == null)
-        {
-            Debug.LogWarning(
-                "[EnvironmentManager] " +
-                "No generated terrain yet."
-            );
-
-            return;
-        }
-
-
-        TerrainData data =
-            currentTerrain.terrainData;
-
-        if (data == null)
-        {
-            return;
-        }
-
-
-        // -----------------------------------------------------
-        // Make sure a TerrainLayer exists.
-        // -----------------------------------------------------
-
-        TerrainLayer[] layers =
-            data.terrainLayers;
-
-        if (
-            layers == null ||
-            layers.Length == 0
-        )
-        {
-            CreateTerrainLayer();
-
-            layers =
-                data.terrainLayers;
-        }
-
-
-        if (
-            layers == null ||
-            layers.Length == 0
-        )
-        {
-            Debug.LogWarning(
-                "[EnvironmentManager] " +
-                "Could not create TerrainLayer."
-            );
-
-            return;
-        }
-
-
-        // -----------------------------------------------------
-        // Calculate colour.
-        // -----------------------------------------------------
-
-        Color color =
-            baseTerrainColor;
-
-
-        // More green:
-        //
-        // greenAmount = +1
-        //
-        // Less green:
-        //
-        // greenAmount = -1
-        //
-
-        color.r =
-            Mathf.Clamp01(
-                baseTerrainColor.r -
-                greenAmount * 0.25f
-            );
-
-        color.g =
-            Mathf.Clamp01(
-                baseTerrainColor.g +
-                greenAmount * 0.45f
-            );
-
-        color.b =
-            Mathf.Clamp01(
-                baseTerrainColor.b -
-                greenAmount * 0.15f
-            );
-
-
-        // -----------------------------------------------------
-        // Apply to every terrain layer.
-        // -----------------------------------------------------
-
-        foreach (
-            TerrainLayer layer
-            in layers
-        )
-        {
-            if (layer == null)
-            {
-                continue;
-            }
-
-            layer.diffuseRemapMax =
-                new Vector4(
-                    color.r,
-                    color.g,
-                    color.b,
-                    1f
-                );
-
-            // TerrainLayer does not have a universal
-            // direct tint property in all Unity versions.
-            //
-            // Therefore we modify the diffuse texture
-            // through the layer's material settings where
-            // possible.
-
-            layer.tileSize =
-                layer.tileSize == Vector2.zero
-                    ? new Vector2(
-                        20f,
-                        20f
-                    )
-                    : layer.tileSize;
-        }
-
-
-        // -----------------------------------------------------
-        // IMPORTANT
-        //
-        // Create a colourized texture and assign it.
-        // -----------------------------------------------------
-
-        Texture2D colourTexture =
-            CreateColourTexture(
-                color
-            );
-
-
-        foreach (
-            TerrainLayer layer
-            in layers
-        )
-        {
-            if (layer == null)
-            {
-                continue;
-            }
-
-            layer.diffuseTexture =
-                colourTexture;
-        }
-
-
-        data.terrainLayers =
-            layers;
-
-
-        Debug.Log(
-            "[EnvironmentManager] " +
-            "Terrain colour updated. " +
-            "Green Amount = " +
-            greenAmount
-        );
-    }
-
-
-    // =========================================================
-    // CREATE COLOUR TEXTURE
-    // =========================================================
-
-    private Texture2D CreateColourTexture(
-        Color color
-    )
-    {
-        Texture2D texture =
-            new Texture2D(
-                2,
-                2,
-                TextureFormat.RGBA32,
-                false
-            );
-
-
-        texture.SetPixel(
-            0,
-            0,
-            color
-        );
-
-        texture.SetPixel(
-            1,
-            0,
-            color
-        );
-
-        texture.SetPixel(
-            0,
-            1,
-            color
-        );
-
-        texture.SetPixel(
-            1,
-            1,
-            color
-        );
-
-
-        texture.wrapMode =
-            TextureWrapMode.Repeat;
-
-
-        texture.Apply();
-
-
-        return texture;
-    }
-
-
-    // =========================================================
-    // APPLY LIGHTING
-    // =========================================================
-
-    private void ApplyLighting()
-    {
-        if (sunLight == null)
-        {
-            FindSun();
-        }
-
-        if (sunLight == null)
-        {
-            return;
-        }
-
-
-        if (!originalSunCaptured)
-        {
-            CaptureSunOriginalValues();
-        }
-
-
-        if (!originalSunCaptured)
-        {
-            return;
-        }
-
-
-        sunLight.intensity =
-            originalSunIntensity *
-            brightness;
-    }
-
-
-    // =========================================================
-    // APPLY ENVIRONMENT TINT
-    // =========================================================
-
-    private void ApplyEnvironmentTint()
-    {
-        if (sunLight == null)
-        {
-            FindSun();
-        }
-
-        if (sunLight == null)
-        {
-            return;
-        }
-
-
-        if (!originalSunCaptured)
-        {
-            CaptureSunOriginalValues();
-        }
-
-
-        if (!originalSunCaptured)
-        {
-            return;
-        }
-
-
-        Color baseColor =
-            originalSunColor;
-
-
-        float red =
-            baseColor.r +
-            warmth * 0.20f;
-
-
-        float green =
-            baseColor.g;
-
-
-        float blue =
-            baseColor.b -
-            warmth * 0.20f;
-
-
-        sunLight.color =
-            new Color(
-                Mathf.Clamp01(red),
-                Mathf.Clamp01(green),
-                Mathf.Clamp01(blue),
-                baseColor.a
-            );
-    }
-
-
-    // =========================================================
-    // CAPTURE SUN
-    // =========================================================
-
-    private void CaptureSunOriginalValues()
-    {
-        if (sunLight == null)
-        {
-            return;
-        }
-
-
-        originalSunIntensity =
-            sunLight.intensity;
-
-
-        originalSunColor =
-            sunLight.color;
-
-
-        originalSunRotation =
-            sunLight.transform.rotation;
-
-
-        originalShadowType =
-            sunLight.shadows;
-
-
-        originalShadowStrength =
-            sunLight.shadowStrength;
-
-
-        originalSunCaptured =
-            true;
-    }
-
-
-    // =========================================================
-    // RESET
-    // =========================================================
-
-    public void ResetEnvironment()
-    {
-        greenAmount =
-            0f;
-
-        brightness =
-            1f;
-
-        warmth =
-            0f;
-
-
-        // -----------------------------------------------------
-        // TERRAIN
-        // -----------------------------------------------------
-
-        Terrain currentTerrain =
-            GetTerrain();
-
-
-        if (currentTerrain != null)
-        {
-            TerrainData data =
-                currentTerrain.terrainData;
-
-
-            if (data != null)
-            {
-                // Recreate a neutral terrain appearance.
-                //
-                // This is preferable to restoring destroyed
-                // runtime TerrainLayer references.
-
-                TerrainLayer[] layers =
-                    data.terrainLayers;
-
-
-                if (
-                    layers != null &&
-                    layers.Length > 0
-                )
-                {
-                    Texture2D resetTexture =
-                        CreateColourTexture(
-                            baseTerrainColor
-                        );
-
-
-                    foreach (
-                        TerrainLayer layer
-                        in layers
-                    )
-                    {
-                        if (layer == null)
-                        {
-                            continue;
-                        }
-
-                        layer.diffuseTexture =
-                            resetTexture;
-                    }
-
-
-                    data.terrainLayers =
-                        layers;
-                }
-            }
-        }
-
-
-        // -----------------------------------------------------
-        // SUN
-        // -----------------------------------------------------
-
-        if (
-            sunLight != null &&
-            originalSunCaptured
-        )
-        {
-            sunLight.intensity =
-                originalSunIntensity;
-
-
-            sunLight.color =
-                originalSunColor;
-
-
-            sunLight.transform.rotation =
-                originalSunRotation;
-
-
-            sunLight.shadows =
-                originalShadowType;
-
-
-            sunLight.shadowStrength =
-                originalShadowStrength;
-        }
-
-
-        // -----------------------------------------------------
-        // FOG
-        // -----------------------------------------------------
-
-        RenderSettings.fog =
+        hasSelectedMountain =
             false;
 
 
-        Debug.Log(
-            "[EnvironmentManager] " +
-            "Environment reset."
-        );
+        pointedMountainId =
+            -1;
+
+        isPointingAtMountain =
+            false;
+
+
+        lastMountainHitPoint =
+            Vector3.zero;
+
+        hasMountainHitPoint =
+            false;
     }
 
 
     // =========================================================
-    // PUBLIC INFORMATION
+    // LAST MOUNTAIN HIT POINT
     // =========================================================
 
-    public float GetGreenAmount()
+    public Vector3 GetLastMountainHitPoint()
     {
-        return greenAmount;
+        return lastMountainHitPoint;
     }
 
 
-    public float GetBrightness()
+    public bool TryGetLastMountainHitPoint(
+        out Vector3 position)
     {
-        return brightness;
+        position =
+            lastMountainHitPoint;
+
+        return hasMountainHitPoint;
     }
 
 
-    public float GetWarmth()
+    // =========================================================
+    // DEBUG STATE
+    // =========================================================
+
+    public string GetDebugState()
     {
-        return warmth;
-    }
+        string pointed =
+            isPointingAtMountain
+                ? pointedMountainId.ToString()
+                : "NONE";
 
 
-    public Terrain GetCurrentTerrain()
-    {
-        return GetTerrain();
-    }
+        string selected =
+            hasSelectedMountain
+                ? selectedMountainId.ToString()
+                : "NONE";
 
 
-    public bool HasTerrain()
-    {
-        return GetTerrain() != null;
+        return
+            "Pointed Mountain ID: " +
+            pointed +
+
+            "\nSelected Mountain ID: " +
+            selected +
+
+            "\nHas Selected Mountain: " +
+            hasSelectedMountain +
+
+            "\nIs Pointing At Mountain: " +
+            isPointingAtMountain;
     }
 }

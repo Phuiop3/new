@@ -119,6 +119,59 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &43654419
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 43654421}
+  - component: {fileID: 43654420}
+  m_Layer: 0
+  m_Name: GameObject (1)
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &43654420
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43654419}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a3de67184c79dd143bcab004bd60a094, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MountainPointingDetector
+  rayInteractor: {fileID: 2084229467}
+  terrainGenerator: {fileID: 1071953541}
+  minimumMountainRelief: 1
+  reliefSampleDistance: 4
+  reliefSampleCount: 8
+  requireTerrainRelief: 1
+  selectionHoldTime: 1.5
+  edgeTolerance: 1
+  debugSelection: 1
+--- !u!4 &43654421
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43654419}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 353.1537, y: 0, z: -277.4332}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &70258852
 GameObject:
   m_ObjectHideFlags: 0
@@ -1131,6 +1184,10 @@ MonoBehaviour:
   rayInteractor: {fileID: 2084229467}
   debugGroundPosition: 1
   debugTreeSelection: 1
+  useDistantSelectionAssist: 1
+  assistConeAngle: 1.5
+  assistMinDistance: 60
+  treeListRefreshInterval: 1
 --- !u!4 &253820425
 Transform:
   m_ObjectHideFlags: 0
@@ -1417,65 +1474,6 @@ RectTransform:
   m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 0, y: 70}
   m_Pivot: {x: 0.5, y: 1}
---- !u!1 &322509907
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 322509909}
-  - component: {fileID: 322509908}
-  m_Layer: 0
-  m_Name: Building
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &322509908
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 322509907}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9ff997498c6b0b144b88056a0925ef38, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::BuildingGenerator
-  targetTerrain: {fileID: 0}
-  housePrefab: {fileID: 2594713235057194443, guid: 0b26cd811d173394ea7ee69051b77c63, type: 3}
-  templePrefab: {fileID: 1320445565239228, guid: 89194aad41c1bc945b7d77ebe7ee9cc5, type: 3}
-  minimumBuildingDistance: 12
-  maximumPlacementAttempts: 100
-  maximumSlope: 15
-  terrainEdgeMargin: 5
-  buildingHeightOffset: 0
-  houseRadius: 5
-  houseMinimumRotation: 0
-  houseMaximumRotation: 360
-  templeRadius: 8
-  templeMinimumRotation: 0
-  templeMaximumRotation: 360
-  generatedBuildingsParent: {fileID: 0}
---- !u!4 &322509909
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 322509907}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 627.7755, y: 0.00004, z: 861.9179}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &439367514
 GameObject:
   m_ObjectHideFlags: 0
@@ -3159,14 +3157,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TerrainGenerator
   targetTerrain: {fileID: 2036175046}
+  waterManager: {fileID: 1251535412}
+  minimumMountainWaterSpacing: 8
   grassTexture: {fileID: 2800000, guid: 216e2729631e003468211108545a08f1, type: 3}
   rockTexture: {fileID: 2800000, guid: 2a92ec3b24546c447ae2a5f5da6f3db8, type: 3}
-  rockHeightStart: 0.45
-  rockHeightFull: 0.7
-  rockSlopeStart: 25
-  rockSlopeFull: 45
-  textureBlendSharpness: 1.5
-  setupTexturesOnStart: 1
+  automaticallyTextureTerrain: 1
+  rockStartHeight: 0.35
+  rockStartSlope: 0.45
+  grassStrength: 1
   minimumMountainRadius: 100
   maximumMountainRadius: 200
   minimumMountainHeight: 100
@@ -3187,8 +3185,13 @@ MonoBehaviour:
   maximumMountainRangeRadius: 500
   minimumMountainRangeHeight: 200
   maximumMountainRangeHeight: 500
+  minimumMountainSpacing: 5
+  maximumPlacementAttempts: 50
+  mountainRoughness: 0.3
+  roughnessScale: 12
+  minimumHeightChangeFraction: 0.5
+  minimumMountainReliefForScaling: 1
   generatedMountains: []
-  nextMountainId: 1
 --- !u!1 &1194434366
 GameObject:
   m_ObjectHideFlags: 0
@@ -3318,7 +3321,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 868f934c6291a7f4daa81b115738ecdd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::WaterManager
-  targetTerrain: {fileID: 0}
+  targetTerrain: {fileID: 2036175046}
+  terrainGenerator: {fileID: 1071953541}
   waterMaterial: {fileID: 2100000, guid: bbb56ac3cf3c61a46ab3887c0fdbda8f, type: 2}
   waterHeightOffset: 0.02
   playerTransform: {fileID: 1835371834}
@@ -3329,6 +3333,7 @@ MonoBehaviour:
   mountainHeightThreshold: 10
   mountainCheckRadius: 15
   placementMargin: 4
+  minimumWaterSpacing: 8
   riverLength: 80
   riverWidth: 12
   riverDepth: 2
@@ -3349,7 +3354,14 @@ MonoBehaviour:
   lakeBankNaturalVariation: 0.12
   lakeBankNoiseScale: 0.06
   generateLakeOnStart: 0
-  generateRiverOnStart: 1
+  generateRiverOnStart: 0
+  minimumDepthStep: 3
+  minimumWidthStep: 4
+  surfaceDrop: 0.3
+  tintWaterByDepth: 1
+  shallowWaterColor: {r: 0.3, g: 0.62, b: 0.78, a: 0.85}
+  deepWaterColor: {r: 0.02, g: 0.12, b: 0.32, a: 0.95}
+  depthForDeepestColor: 12
 --- !u!1 &1262097001
 GameObject:
   m_ObjectHideFlags: 0
@@ -3374,7 +3386,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1262097001}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: beb2d9229076bdc4695530e447782b07, type: 3}
   m_Name: 
@@ -3385,6 +3397,8 @@ MonoBehaviour:
     prefab: {fileID: 191266, guid: c44bd9bdc114d4a60932c0087d9d1732, type: 3}
   - treeType: Palm
     prefab: {fileID: 188006, guid: c6b7fb383a3534b039692b5485b6e739, type: 3}
+  - treeType: Pine
+    prefab: {fileID: 137650, guid: 826b6a0b570e8460990010fa615b5a2a, type: 3}
   terrainGenerator: {fileID: 1071953541}
   treeParent: {fileID: 2117647878}
   maximumTrees: 5000
@@ -3404,12 +3418,12 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1262097001}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 442.67984, y: 0, z: -232.51854}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 94.252014, y: 0, z: 99.053604}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 0}
+  m_Father: {fileID: 2090527670}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1271821059
 GameObject:
@@ -4168,20 +4182,25 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ollamaUrl: http://localhost:11434/api/chat
   demoModel: qwen3:4b
+  disableModelThinking: 1
+  requireCommandWord: 1
+  pointedPositionOnlyWithDeixis: 1
+  defaultTreeCount: 10
   inputField: {fileID: 0}
   outputText: {fileID: 832344030}
   sendButton: {fileID: 0}
   terrainGenerator: {fileID: 1071953541}
   treeManager: {fileID: 1262097002}
-  treePointingDetector: {fileID: 253820424}
-  buildingGenerator: {fileID: 0}
   waterManager: {fileID: 1251535412}
+  waterPointingDetector: {fileID: 1791670108}
+  treePointingDetector: {fileID: 253820424}
+  mountainPointingDetector: {fileID: 43654420}
   highConfidenceThreshold: 0.8
   mediumConfidenceThreshold: 0.5
-  useConversationHistory: 1
-  maximumConversationTurns: 6
-  allowDesignAdvice: 1
-  allowClarification: 1
+  enableHelpAndAdvice: 1
+  showContextualHelpForWhatCanIDoHere: 1
+  defaultTreeRemovalRadius: 10
+  selectedTreeRemovalRadius: 0.25
 --- !u!114 &1499858000
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4915,6 +4934,55 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1783454397}
   m_CullTransparentMesh: 1
+--- !u!1 &1791670107
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1791670109}
+  - component: {fileID: 1791670108}
+  m_Layer: 0
+  m_Name: water
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1791670108
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1791670107}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 22ea423707c22d44589de9fa711c4513, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WaterPointingDetector
+  rayInteractor: {fileID: 2084229467}
+  waterManager: {fileID: 1251535412}
+  pointingTolerance: 2
+  selectionHoldTime: 1.5
+  debugSelection: 1
+--- !u!4 &1791670109
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1791670107}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 353.1537, y: 0, z: -277.4332}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1797666329
 GameObject:
   m_ObjectHideFlags: 0
@@ -5130,7 +5198,7 @@ Transform:
   m_GameObject: {fileID: 1835371830}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 737, y: 14, z: 817}
+  m_LocalPosition: {x: 103, y: 14, z: 817}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -6205,6 +6273,7 @@ GameObject:
   - component: {fileID: 2036175047}
   - component: {fileID: 2036175046}
   - component: {fileID: 2036175045}
+  - component: {fileID: 2036175048}
   m_Layer: 0
   m_Name: Terrain
   m_TagString: Untagged
@@ -6288,6 +6357,145 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2036175048
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2036175044}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4253f32900bcc4d499d675566142ded0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.XR.Interaction.Toolkit::UnityEngine.XR.Interaction.Toolkit.Interactors.XRDirectInteractor
+  m_InteractionManager: {fileID: 0}
+  m_InteractionLayers:
+    m_Bits: 4294967295
+  m_Handedness: 0
+  m_AttachTransform: {fileID: 0}
+  m_KeepSelectedTargetValid: 1
+  m_DisableVisualsWhenBlockedInGroup: 1
+  m_StartingSelectedInteractable: {fileID: 0}
+  m_StartingTargetFilter: {fileID: 0}
+  m_AutoFindParentInteractableInHierarchy: 0
+  m_ParentInteractableObject: {fileID: 0}
+  m_HoverEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_HoverExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_SelectEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_SelectExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_StartingHoverFilters: []
+  m_StartingSelectFilters: []
+  m_SelectInput:
+    m_InputSourceMode: 2
+    m_InputActionPerformed:
+      m_Name: Select
+      m_Type: 1
+      m_ExpectedControlType: 
+      m_Id: 56a454b4-ea57-496d-83e7-f4ce3755b20a
+      m_Processors: 
+      m_Interactions: 
+      m_SingletonActionBindings: []
+      m_Flags: 0
+    m_InputActionValue:
+      m_Name: Select Value
+      m_Type: 0
+      m_ExpectedControlType: Axis
+      m_Id: 0b8cbfcf-f523-4237-93fe-f854b35deeaf
+      m_Processors: 
+      m_Interactions: 
+      m_SingletonActionBindings: []
+      m_Flags: 0
+    m_InputActionReferencePerformed: {fileID: 0}
+    m_InputActionReferenceValue: {fileID: 0}
+    m_ObjectReferenceObject: {fileID: 0}
+    m_ManualPerformed: 0
+    m_ManualValue: 0
+    m_ManualQueuePerformed: 0
+    m_ManualQueueWasPerformedThisFrame: 0
+    m_ManualQueueWasCompletedThisFrame: 0
+    m_ManualQueueValue: 0
+    m_ManualQueueTargetFrame: 0
+  m_ActivateInput:
+    m_InputSourceMode: 2
+    m_InputActionPerformed:
+      m_Name: Activate
+      m_Type: 1
+      m_ExpectedControlType: 
+      m_Id: 99eb480e-6369-4058-9361-87079d91ca4a
+      m_Processors: 
+      m_Interactions: 
+      m_SingletonActionBindings: []
+      m_Flags: 0
+    m_InputActionValue:
+      m_Name: Activate Value
+      m_Type: 0
+      m_ExpectedControlType: Axis
+      m_Id: 46a676b3-2d22-4bed-aeab-47496d365d87
+      m_Processors: 
+      m_Interactions: 
+      m_SingletonActionBindings: []
+      m_Flags: 0
+    m_InputActionReferencePerformed: {fileID: 0}
+    m_InputActionReferenceValue: {fileID: 0}
+    m_ObjectReferenceObject: {fileID: 0}
+    m_ManualPerformed: 0
+    m_ManualValue: 0
+    m_ManualQueuePerformed: 0
+    m_ManualQueueWasPerformedThisFrame: 0
+    m_ManualQueueWasCompletedThisFrame: 0
+    m_ManualQueueValue: 0
+    m_ManualQueueTargetFrame: 0
+  m_SelectActionTrigger: 1
+  m_AllowHoveredActivate: 0
+  m_TargetPriorityMode: 0
+  m_HideControllerOnSelect: 0
+  m_InputCompatibilityMode: 0
+  m_PlayAudioClipOnSelectEntered: 0
+  m_AudioClipForOnSelectEntered: {fileID: 0}
+  m_PlayAudioClipOnSelectExited: 0
+  m_AudioClipForOnSelectExited: {fileID: 0}
+  m_PlayAudioClipOnSelectCanceled: 0
+  m_AudioClipForOnSelectCanceled: {fileID: 0}
+  m_PlayAudioClipOnHoverEntered: 0
+  m_AudioClipForOnHoverEntered: {fileID: 0}
+  m_PlayAudioClipOnHoverExited: 0
+  m_AudioClipForOnHoverExited: {fileID: 0}
+  m_PlayAudioClipOnHoverCanceled: 0
+  m_AudioClipForOnHoverCanceled: {fileID: 0}
+  m_AllowHoverAudioWhileSelecting: 1
+  m_PlayHapticsOnSelectEntered: 0
+  m_HapticSelectEnterIntensity: 0
+  m_HapticSelectEnterDuration: 0
+  m_PlayHapticsOnSelectExited: 0
+  m_HapticSelectExitIntensity: 0
+  m_HapticSelectExitDuration: 0
+  m_PlayHapticsOnSelectCanceled: 0
+  m_HapticSelectCancelIntensity: 0
+  m_HapticSelectCancelDuration: 0
+  m_PlayHapticsOnHoverEntered: 0
+  m_HapticHoverEnterIntensity: 0
+  m_HapticHoverEnterDuration: 0
+  m_PlayHapticsOnHoverExited: 0
+  m_HapticHoverExitIntensity: 0
+  m_HapticHoverExitDuration: 0
+  m_PlayHapticsOnHoverCanceled: 0
+  m_HapticHoverCancelIntensity: 0
+  m_HapticHoverCancelDuration: 0
+  m_AllowHoverHapticsWhileSelecting: 1
+  m_ImproveAccuracyWithSphereCollider: 0
+  m_PhysicsLayerMask:
+    serializedVersion: 2
+    m_Bits: 1
+  m_PhysicsTriggerInteraction: 1
 --- !u!1 &2080751348
 GameObject:
   m_ObjectHideFlags: 0
@@ -6522,7 +6730,8 @@ Transform:
   m_LocalPosition: {x: 348.42783, y: -0, z: -331.57214}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 1262097003}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2099973333
@@ -6916,10 +7125,10 @@ SceneRoots:
   - {fileID: 1502455620}
   - {fileID: 2090527670}
   - {fileID: 1071953540}
-  - {fileID: 1262097003}
   - {fileID: 2117647878}
   - {fileID: 253820425}
   - {fileID: 1251535411}
   - {fileID: 2007584282}
-  - {fileID: 322509909}
   - {fileID: 2036175047}
+  - {fileID: 43654421}
+  - {fileID: 1791670109}

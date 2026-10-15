@@ -194,6 +194,42 @@ public class TerrainGenerator : MonoBehaviour
 
 
     // ============================================================
+    // MOUNTAIN MODIFY (Round 2)
+    // ============================================================
+
+    [Header("Mountain Variety")]
+
+    [Tooltip("0 = every mountain has the same shape. 0.5 = each new mountain gets its own steepness, summit width and lopsidedness.")]
+    [SerializeField]
+    [Range(0f, 1f)]
+    private float mountainShapeVariation = 0.5f;
+
+
+    [Header("Mountain Roughness")]
+
+    [Tooltip("0 = smooth (Round 1 look). 0.5 = gently uneven slopes. 1 = clearly rugged. Applies to newly created mountains.")]
+    [SerializeField]
+    [Range(0f, 1f)]
+    private float mountainRoughness = 0.5f;
+
+    [Tooltip("Size (m) of the largest bumps. Minimum 8 m.")]
+    [SerializeField]
+    private float roughnessScale = 30f;
+
+
+    [Header("Mountain Modify")]
+
+    [Tooltip("'Taller' or 'shorter' changes the peak by at least this fraction of its current height, so the change is visible.")]
+    [SerializeField]
+    [Range(0.05f, 1f)]
+    private float minimumHeightChangeFraction = 0.5f;
+
+    [Tooltip("Mountains flatter than this (m) are not scaled.")]
+    [SerializeField]
+    private float minimumMountainReliefForScaling = 1f;
+
+
+    // ============================================================
     // MOUNTAIN TYPES
     // ============================================================
 
@@ -371,6 +407,117 @@ public class TerrainGenerator : MonoBehaviour
         }
 
         return false;
+    }
+
+
+    public bool HasMountain(
+        int id)
+    {
+        MountainInfo mountain;
+
+        return TryGetMountainById(
+            id,
+            out mountain
+        );
+    }
+
+
+    // ============================================================
+    // DELETE MOUNTAIN
+    // ============================================================
+    //
+    // Restores the ground inside the mountain's footprint to the
+    // terrain saved at start, blending smoothly at the edge, and
+    // removes the mountain from the list of recorded mountains.
+    //
+    // ============================================================
+
+    public bool DeleteMountain(
+        int id)
+    {
+        if (!HasValidTerrain())
+            return false;
+
+        MountainInfo mountain;
+
+        if (!TryGetMountainById(id, out mountain))
+            return false;
+
+        TerrainData data = targetTerrain.terrainData;
+        int res = data.heightmapResolution;
+        Vector3 size = data.size;
+        float radius = Mathf.Max(mountain.radius, 1f);
+
+        float cx = mountain.terrainPosition.x / size.x * (res - 1);
+        float cz = mountain.terrainPosition.y / size.z * (res - 1);
+        float cellsPerMetreX = (res - 1) / size.x;
+        float cellsPerMetreZ = (res - 1) / size.z;
+
+        int x0 = Mathf.Clamp(Mathf.FloorToInt(cx - radius * cellsPerMetreX) - 1, 0, res - 1);
+        int x1 = Mathf.Clamp(Mathf.CeilToInt(cx + radius * cellsPerMetreX) + 1, 0, res - 1);
+        int y0 = Mathf.Clamp(Mathf.FloorToInt(cz - radius * cellsPerMetreZ) - 1, 0, res - 1);
+        int y1 = Mathf.Clamp(Mathf.CeilToInt(cz + radius * cellsPerMetreZ) + 1, 0, res - 1);
+
+        int w = x1 - x0 + 1;
+        int h = y1 - y0 + 1;
+
+        float[,] heights = data.GetHeights(x0, y0, w, h);
+
+        // Base height around the footprint, used when no saved
+        // terrain is available.
+        float ringSum = 0f;
+        int ringCount = 0;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                float dxm = (x0 + x - cx) / cellsPerMetreX;
+                float dzm = (y0 + y - cz) / cellsPerMetreZ;
+                float d01 = Mathf.Sqrt(dxm * dxm + dzm * dzm) / radius;
+
+                if (d01 >= 0.9f && d01 <= 1f)
+                {
+                    ringSum += heights[y, x];
+                    ringCount++;
+                }
+            }
+        }
+
+        float baseHeight = ringCount > 0 ? ringSum / ringCount : 0f;
+        bool useSaved = originalTerrainSaved && originalHeights != null;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                float dxm = (x0 + x - cx) / cellsPerMetreX;
+                float dzm = (y0 + y - cz) / cellsPerMetreZ;
+                float d01 = Mathf.Sqrt(dxm * dxm + dzm * dzm) / radius;
+
+                if (d01 > 1f)
+                    continue;
+
+                float target = useSaved
+                    ? originalHeights[y0 + y, x0 + x]
+                    : Mathf.Min(heights[y, x], baseHeight);
+
+                float weight = 1f - Mathf.SmoothStep(0.85f, 1f, d01);
+
+                heights[y, x] = Mathf.Lerp(heights[y, x], target, weight);
+            }
+        }
+
+        data.SetHeights(x0, y0, heights);
+
+        generatedMountains.Remove(mountain);
+
+        PaintTerrainTextures();
+        RefreshTerrainCollider();
+
+        Debug.Log("[TerrainGenerator] Mountain " + id + " deleted.");
+
+        return true;
     }
 
 
@@ -1073,6 +1220,24 @@ public class TerrainGenerator : MonoBehaviour
         float angle,
         float seed)
     {
+        return CalculateSingleMountainShape(
+            distance01, angle, seed,
+            singleMountainBaseExponent,
+            singleMountainPeakWidth,
+            singleMountainPeakSharpness,
+            singleMountainIrregularity);
+    }
+
+
+    private float CalculateSingleMountainShape(
+        float distance01,
+        float angle,
+        float seed,
+        float baseExponent,
+        float peakWidth,
+        float peakSharpness,
+        float irregularity)
+    {
         distance01 =
             Mathf.Clamp01(
                 distance01
@@ -1082,7 +1247,7 @@ public class TerrainGenerator : MonoBehaviour
             1f -
             Mathf.Pow(
                 distance01,
-                singleMountainBaseExponent
+                baseExponent
             );
 
         baseShape =
@@ -1092,7 +1257,7 @@ public class TerrainGenerator : MonoBehaviour
 
         float peakStart =
             Mathf.Clamp01(
-                singleMountainPeakWidth
+                peakWidth
             );
 
         float peak =
@@ -1108,7 +1273,7 @@ public class TerrainGenerator : MonoBehaviour
         peak =
             Mathf.Pow(
                 peak,
-                singleMountainPeakSharpness
+                peakSharpness
             );
 
         float noise =
@@ -1127,7 +1292,7 @@ public class TerrainGenerator : MonoBehaviour
                 1f,
                 0.75f +
                 noise * 0.5f,
-                singleMountainIrregularity
+                irregularity
             );
 
         float shape =
@@ -1316,6 +1481,39 @@ public class TerrainGenerator : MonoBehaviour
         float rangeLength =
             radius * 2f;
 
+        // Each new single mountain gets its own shape (Round 2).
+        float v = mountainShapeVariation;
+
+        float baseExponent =
+            singleMountainBaseExponent *
+            Random.Range(1f - 0.4f * v, 1f + 0.8f * v);
+
+        float peakWidth =
+            Mathf.Clamp(
+                singleMountainPeakWidth *
+                Random.Range(1f - 0.5f * v, 1f + 0.8f * v),
+                0.1f,
+                1f
+            );
+
+        float peakSharpness =
+            singleMountainPeakSharpness *
+            Random.Range(1f - 0.4f * v, 1f + 0.4f * v);
+
+        float irregularity =
+            Mathf.Clamp01(
+                singleMountainIrregularity +
+                Random.Range(0f, 0.4f * v)
+            );
+
+        // Lopsided: one side steeper than the other. The factor is
+        // never below 1, so the mountain never spills past its radius.
+        float steepSideAngle =
+            Random.Range(0f, Mathf.PI * 2f);
+
+        float steepSideAmount =
+            Random.Range(0f, 0.6f * v);
+
         for (int y = 0;
              y < resolution;
              y++)
@@ -1368,11 +1566,20 @@ public class TerrainGenerator : MonoBehaviour
 
                 if (singleMountain)
                 {
+                    float lopsided =
+                        1f +
+                        steepSideAmount *
+                        (Mathf.Cos(angle - steepSideAngle) + 1f) * 0.5f;
+
                     shape =
                         CalculateSingleMountainShape(
-                            distance01,
+                            Mathf.Clamp01(distance01 * lopsided),
                             angle,
-                            seed
+                            seed,
+                            baseExponent,
+                            peakWidth,
+                            peakSharpness,
+                            irregularity
                         );
                 }
                 else
@@ -1416,6 +1623,24 @@ public class TerrainGenerator : MonoBehaviour
                     height *
                     shape;
 
+                // Rough surface: gentle bumps and gullies on the slopes.
+                // Added (not multiplied), limited to a small fraction of
+                // the mountain height, and faded out at the foot and at
+                // the summit, so no spikes are produced.
+                if (mountainRoughness > 0f && height > 0f)
+                {
+                    float fade =
+                        Mathf.SmoothStep(0f, 1f, shape * 3f) *
+                        (1f - Mathf.SmoothStep(0.75f, 1f, shape));
+
+                    addedHeight +=
+                        height *
+                        mountainRoughness *
+                        0.12f *
+                        SmoothNoise(worldX, worldZ, seed) *
+                        fade;
+                }
+
                 float finalWorldHeight =
                     worldHeight +
                     addedHeight;
@@ -1431,7 +1656,54 @@ public class TerrainGenerator : MonoBehaviour
 
 
     // ============================================================
-    // MODIFY MOUNTAIN
+    // SMOOTH NOISE (rough mountain surface)
+    // ============================================================
+    //
+    // Three layers of Perlin noise. The smallest layer is still
+    // several metres wide, so the heightmap can show it without
+    // turning it into spikes. Returns roughly -1..1.
+    //
+    // ============================================================
+
+    private float SmoothNoise(float x, float z, float seed)
+    {
+        float total = 0f;
+        float amplitude = 1f;
+        float frequency = 1f / Mathf.Max(roughnessScale, 8f);
+        float sum = 0f;
+
+        for (int i = 0; i < 3; i++)
+        {
+            float n = Mathf.PerlinNoise(
+                x * frequency + seed * 0.37f + i * 17.1f,
+                z * frequency + seed * 0.61f + i * 31.7f
+            );
+
+            total += (n * 2f - 1f) * amplitude;
+            sum += amplitude;
+
+            amplitude *= 0.5f;
+            frequency *= 2f;
+        }
+
+        return total / Mathf.Max(sum, 0.001f);
+    }
+
+
+    // ============================================================
+    // MODIFY MOUNTAIN (Round 2)
+    // ============================================================
+    //
+    // Round 1 added a NEW random mountain shape on top of the old
+    // one. The whole footprint rose, so the mountain mostly became
+    // fatter, and a +5 m change on a large mountain was hard to see.
+    // Sometimes it even looked lower.
+    //
+    // Now the existing mountain is scaled vertically above its own
+    // base. Its shape is kept, only the peak height changes, and
+    // the change is at least a set fraction of the current height.
+    // The Console reports the peak height before and after.
+    //
     // ============================================================
 
     public bool ModifyMountain(
@@ -1440,96 +1712,150 @@ public class TerrainGenerator : MonoBehaviour
         float radiusOverride = -1f)
     {
         if (!HasValidTerrain())
-        {
             return false;
-        }
 
         MountainInfo mountain;
 
-        if (!TryGetMountainById(
-                mountainId,
-                out mountain))
+        if (!TryGetMountainById(mountainId, out mountain))
+            return false;
+
+        if (Mathf.Abs(heightChange) < 0.01f)
+            return false;
+
+        float radius =
+            radiusOverride > 0f ? radiusOverride : mountain.radius;
+
+        TerrainData data = targetTerrain.terrainData;
+        int res = data.heightmapResolution;
+        Vector3 size = data.size;
+
+        // ---------------- REGION AROUND THE MOUNTAIN ----------------
+
+        float cx = mountain.terrainPosition.x / size.x * (res - 1);
+        float cz = mountain.terrainPosition.y / size.z * (res - 1);
+        float cellsPerMetreX = (res - 1) / size.x;
+        float cellsPerMetreZ = (res - 1) / size.z;
+
+        int x0 = Mathf.Clamp(Mathf.FloorToInt(cx - radius * cellsPerMetreX) - 1, 0, res - 1);
+        int x1 = Mathf.Clamp(Mathf.CeilToInt(cx + radius * cellsPerMetreX) + 1, 0, res - 1);
+        int y0 = Mathf.Clamp(Mathf.FloorToInt(cz - radius * cellsPerMetreZ) - 1, 0, res - 1);
+        int y1 = Mathf.Clamp(Mathf.CeilToInt(cz + radius * cellsPerMetreZ) + 1, 0, res - 1);
+
+        int w = x1 - x0 + 1;
+        int h = y1 - y0 + 1;
+
+        float[,] heights = data.GetHeights(x0, y0, w, h);
+        float[,] distance01 = new float[h, w];
+
+        // ---------------- BASE AND PEAK ----------------
+
+        float ringSum = 0f;
+        int ringCount = 0;
+        float peak = 0f;
+
+        for (int y = 0; y < h; y++)
         {
+            for (int x = 0; x < w; x++)
+            {
+                float dxm = (x0 + x - cx) / cellsPerMetreX;
+                float dzm = (y0 + y - cz) / cellsPerMetreZ;
+                float d01 = Mathf.Sqrt(dxm * dxm + dzm * dzm) / Mathf.Max(radius, 0.01f);
+
+                distance01[y, x] = d01;
+
+                if (d01 > 1f)
+                    continue;
+
+                peak = Mathf.Max(peak, heights[y, x]);
+
+                if (d01 >= 0.9f)
+                {
+                    ringSum += heights[y, x];
+                    ringCount++;
+                }
+            }
+        }
+
+        float baseHeight = ringCount > 0 ? ringSum / ringCount : 0f;
+        float reliefBefore = (peak - baseHeight) * size.y;
+
+        if (reliefBefore < minimumMountainReliefForScaling)
+        {
+            Debug.LogWarning(
+                "[TerrainGenerator] Mountain " + mountainId +
+                " is almost flat (" + reliefBefore.ToString("F1") +
+                " m), so it cannot be scaled."
+            );
+
             return false;
         }
 
-        float radius =
-            radiusOverride > 0f
-                ? radiusOverride
-                : mountain.radius;
+        // ---------------- HOW MUCH TO CHANGE ----------------
 
-        float currentHeight =
-            mountain.type ==
-            MountainType.Range
-                ? maximumMountainRangeHeight
-                : maximumMountainHeight;
+        float change = heightChange;
+        float minimumChange = reliefBefore * minimumHeightChangeFraction;
 
-        float change =
-            Mathf.Clamp(
-                heightChange,
-                -currentHeight,
-                currentHeight
+        if (Mathf.Abs(change) < minimumChange)
+            change = Mathf.Sign(change) * minimumChange;
+
+        float reliefAfter =
+            Mathf.Max(reliefBefore + change, minimumMountainReliefForScaling);
+
+        // Do not go above the terrain's maximum height: that would
+        // flatten the top and make the mountain look cut off.
+        float maximumRelief = (1f - baseHeight) * size.y - 1f;
+
+        if (reliefAfter > maximumRelief)
+        {
+            Debug.LogWarning(
+                "[TerrainGenerator] Mountain " + mountainId +
+                " reached the terrain's maximum height (" + size.y.ToString("F0") +
+                " m). Increase Terrain Height in the terrain settings to allow taller mountains."
             );
 
-        Vector2 center =
-            mountain.terrainPosition;
+            reliefAfter = maximumRelief;
+        }
 
-        TerrainData data =
-            targetTerrain.terrainData;
+        float scale = reliefAfter / reliefBefore;
 
-        int resolution =
-            data.heightmapResolution;
+        // ---------------- SCALE ABOVE THE BASE ----------------
 
-        float[,] heights =
-            data.GetHeights(
-                0,
-                0,
-                resolution,
-                resolution
-            );
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                float d01 = distance01[y, x];
 
-        float[,] current =
-            data.GetHeights(
-                0,
-                0,
-                resolution,
-                resolution
-            );
+                if (d01 > 1f)
+                    continue;
 
-        Vector3 terrainSize =
-            data.size;
+                float above = heights[y, x] - baseHeight;
 
-        Vector2 normalizedCenter =
-            new Vector2(
-                center.x /
-                terrainSize.x,
+                if (above <= 0f)
+                    continue;
 
-                center.y /
-                terrainSize.z
-            );
+                float target = baseHeight + above * scale;
 
-        ModifyTerrainArea(
-            heights,
-            current,
-            normalizedCenter,
-            radius,
-            change,
-            mountain.type ==
-            MountainType.Single
-        );
+                // Blend out over the outer edge so there is no seam.
+                float weight = 1f - Mathf.SmoothStep(0.85f, 1f, d01);
 
-        data.SetHeights(
-            0,
-            0,
-            heights
-        );
+                heights[y, x] = Mathf.Clamp01(Mathf.Lerp(heights[y, x], target, weight));
+            }
+        }
 
-        mountain.radius =
-            radius;
+        data.SetHeights(x0, y0, heights);
+
+        mountain.radius = radius;
 
         PaintTerrainTextures();
-
         RefreshTerrainCollider();
+
+        Debug.Log(
+            "[TerrainGenerator] Mountain " + mountainId + " " +
+            (change > 0f ? "taller" : "shorter") +
+            ": peak height above base " + reliefBefore.ToString("F1") +
+            " m -> " + reliefAfter.ToString("F1") + " m."
+        );
 
         return true;
     }
@@ -1626,7 +1952,7 @@ public class TerrainGenerator : MonoBehaviour
     // WORLD -> TERRAIN POSITION
     // ============================================================
 
-    private Vector2 WorldToTerrainPosition(
+    public Vector2 WorldToTerrainPosition(
         Vector3 worldPosition)
     {
         if (targetTerrain == null)

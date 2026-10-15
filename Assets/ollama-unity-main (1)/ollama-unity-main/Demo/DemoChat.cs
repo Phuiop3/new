@@ -10,19 +10,45 @@ using UnityEngine.Networking;
 
 public class DemoChat : MonoBehaviour
 {
-  
+    // =========================================================
+    // OLLAMA
+    // =========================================================
 
     [Header("Ollama")]
 
     [SerializeField]
-    private string ollamaUrl =
-        "http://localhost:11434/api/chat";
+    private string ollamaUrl = "http://localhost:11434/api/chat";
 
     [SerializeField]
-    private string demoModel =
-        "qwen3:4b";
+    private string demoModel = "qwen3:4b";
 
-   
+    [Tooltip("Disable qwen3 'thinking' output so the reply contains only JSON.")]
+    [SerializeField]
+    private bool disableModelThinking = true;
+
+
+    // =========================================================
+    // TRANSCRIPT RULES (Round 2)
+    // =========================================================
+
+    [Header("Transcript Rules")]
+
+    [Tooltip("Reject transcripts that contain no recognised command word, so misheard speech is not executed.")]
+    [SerializeField]
+    private bool requireCommandWord = true;
+
+    [Tooltip("Create at the pointed position only when the request says 'here', 'there', 'this spot' or similar.")]
+    [SerializeField]
+    private bool pointedPositionOnlyWithDeixis = true;
+
+    [Tooltip("Tree count used when the request gives no number (for example 'plant some trees').")]
+    [SerializeField]
+    private int defaultTreeCount = 10;
+
+
+    // =========================================================
+    // UI
+    // =========================================================
 
     [Header("UI")]
 
@@ -37,7 +63,7 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // TERRAIN
+    // SYSTEMS
     // =========================================================
 
     [Header("Terrain")]
@@ -45,40 +71,10 @@ public class DemoChat : MonoBehaviour
     [SerializeField]
     private TerrainGenerator terrainGenerator;
 
-
-    // =========================================================
-    // TREES
-    // =========================================================
-
     [Header("Trees")]
 
     [SerializeField]
     private TreeManager treeManager;
-
-
-    // =========================================================
-    // TREE POINTING
-    // =========================================================
-
-    [Header("XR Tree Pointing")]
-
-    [SerializeField]
-    private TreePointingDetector treePointingDetector;
-
-
-    // =========================================================
-    // BUILDINGS
-    // =========================================================
-
-    [Header("Buildings")]
-
-    [SerializeField]
-    private BuildingGenerator buildingGenerator;
-
-
-    // =========================================================
-    // WATER
-    // =========================================================
 
     [Header("Water")]
 
@@ -87,43 +83,62 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
+    // XR POINTING
+    // =========================================================
+
+    [Header("XR Pointing")]
+
+    [SerializeField]
+    private WaterPointingDetector waterPointingDetector;
+
+    [SerializeField]
+    private TreePointingDetector treePointingDetector;
+
+    [SerializeField]
+    private MountainPointingDetector mountainPointingDetector;
+
+
+    // =========================================================
     // CONFIDENCE
     // =========================================================
 
     [Header("AI Confidence")]
 
+    [Tooltip("At or above this value a command is executed without comment.")]
     [SerializeField]
     private float highConfidenceThreshold = 0.80f;
 
+    [Tooltip("Below this value a command is rejected and the user is asked to rephrase.")]
     [SerializeField]
     private float mediumConfidenceThreshold = 0.50f;
 
 
     // =========================================================
-    // CONVERSATION
+    // HELP / ADVICE
     // =========================================================
 
-    [Header("Conversation")]
+    [Header("Help and Advice")]
 
+    [Tooltip("Answer help questions locally instead of sending them to the AI.")]
     [SerializeField]
-    private bool useConversationHistory = true;
+    private bool enableHelpAndAdvice = true;
 
+    [Tooltip("Include suggestions for the object the user is currently pointing at.")]
     [SerializeField]
-    [Range(1, 10)]
-    private int maximumConversationTurns = 6;
+    private bool showContextualHelpForWhatCanIDoHere = true;
 
 
     // =========================================================
-    // LLM ROLE
+    // DEFAULTS
     // =========================================================
 
-    [Header("LLM Role")]
+    [Header("Defaults")]
 
     [SerializeField]
-    private bool allowDesignAdvice = true;
+    private float defaultTreeRemovalRadius = 10f;
 
     [SerializeField]
-    private bool allowClarification = true;
+    private float selectedTreeRemovalRadius = 0.25f;
 
 
     // =========================================================
@@ -131,30 +146,6 @@ public class DemoChat : MonoBehaviour
     // =========================================================
 
     private bool isGenerating = false;
-
-    private bool hasPendingConfirmation = false;
-
-    private LandscapeCommand pendingCommand = null;
-
-    private SpatialContext pendingSpatialContext = null;
-
-
-    // =========================================================
-    // CONVERSATION HISTORY
-    // =========================================================
-
-    private List<ConversationTurn> conversationHistory =
-        new List<ConversationTurn>();
-
-
-    private LandscapeCommand lastAdviceCommand = null;
-
-    private string lastAdviceText = "";
-
-
-    // =========================================================
-    // PUBLIC STATE
-    // =========================================================
 
     public bool IsGenerating
     {
@@ -169,17 +160,32 @@ public class DemoChat : MonoBehaviour
     private void Start()
     {
         if (sendButton != null)
-        {
-            sendButton.onClick.AddListener(
-                SendCurrentPrompt
-            );
-        }
+            sendButton.onClick.AddListener(SendCurrentPrompt);
 
-        if (outputText != null)
-        {
-            outputText.text =
-                "Describe the terrain, mountains, trees, buildings, or water you want.";
-        }
+        if (terrainGenerator == null)
+            terrainGenerator = FindFirstObjectByType<TerrainGenerator>();
+
+        if (treeManager == null)
+            treeManager = FindFirstObjectByType<TreeManager>();
+
+        if (waterManager == null)
+            waterManager = FindFirstObjectByType<WaterManager>();
+
+        if (waterPointingDetector == null)
+            waterPointingDetector = FindFirstObjectByType<WaterPointingDetector>();
+
+        if (treePointingDetector == null)
+            treePointingDetector = FindFirstObjectByType<TreePointingDetector>();
+
+        if (mountainPointingDetector == null)
+            mountainPointingDetector = FindFirstObjectByType<MountainPointingDetector>();
+
+        SetOutput(
+            "You can create mountains, rivers, lakes and trees.\n\n" +
+            (enableHelpAndAdvice
+                ? "Try asking: \"What can I do here?\""
+                : "Try: \"Create a mountain and a lake\"")
+        );
     }
 
 
@@ -191,22 +197,15 @@ public class DemoChat : MonoBehaviour
     {
         if (inputField == null)
         {
-            Debug.LogError(
-                "[DemoChat] InputField is not assigned."
-            );
-
+            Debug.LogError("[DemoChat] InputField is not assigned.");
             return;
         }
 
-        string prompt =
-            inputField.text.Trim();
+        string prompt = inputField.text.Trim();
 
         if (string.IsNullOrWhiteSpace(prompt))
         {
-            SetOutput(
-                "Please describe what you want."
-            );
-
+            SetOutput("Please describe what you want.");
             return;
         }
 
@@ -215,150 +214,303 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // SEND PROMPT
+    // SEND PROMPT (UI)
     // =========================================================
 
     public void SendPrompt(string userPrompt)
     {
+        // Evaluation logging: record exactly what was typed.
+        Debug.Log("[DemoChat] TRANSCRIPT (typed): " + userPrompt);
+
         if (string.IsNullOrWhiteSpace(userPrompt))
+            return;
+
+        userPrompt = userPrompt.Trim();
+
+        if (isGenerating)
         {
+            SetOutput("AI is already processing a request.");
             return;
         }
-
-        userPrompt =
-            userPrompt.Trim();
-
-
-        // -----------------------------------------------------
-        // CONFIRMATION
-        // -----------------------------------------------------
-
-        if (hasPendingConfirmation)
-        {
-            if (IsConfirmationYes(userPrompt))
-            {
-                ConfirmPendingCommand();
-                return;
-            }
-
-            if (IsConfirmationNo(userPrompt))
-            {
-                CancelPendingCommand();
-                return;
-            }
-
-            ClearPendingConfirmation();
-        }
-
-
-        // -----------------------------------------------------
-        // QUICK "DO IT" / "DO THAT"
-        // -----------------------------------------------------
-
-        // If the previous AI response contained an actionable
-        // recommendation, allow the user to directly execute it.
-
-        if (
-            HasActionableAdvice() &&
-            IsExecutePreviousAdviceRequest(userPrompt)
-        )
-        {
-            ExecuteLastAdvice();
-            return;
-        }
-
-
-        // -----------------------------------------------------
-        // TRANSCRIPT
-        // -----------------------------------------------------
 
         if (!IsUsableTranscript(userPrompt))
         {
-            SetOutput(
-                "I could not clearly understand the request. " +
-                "Please try again."
-            );
-
+            SetOutput("I could not clearly understand the request. Please try again.");
             return;
         }
 
+        SpatialContext spatialContext = CaptureSpatialContext();
 
-        SpatialContext spatialContext =
-            CaptureSpatialContext();
+        if (TryHandleHelpRequest(userPrompt, spatialContext))
+            return;
 
-        StartCoroutine(
-            SendToOllama(
-                userPrompt,
-                spatialContext,
-                null
-            )
-        );
+        StartCoroutine(SendToOllama(userPrompt, spatialContext, null));
     }
 
 
     // =========================================================
-    // ASYNC ASK
+    // ASYNC ASK (VOICE)
     // =========================================================
 
     public async Task Ask(string userPrompt)
     {
+        // Evaluation logging: record exactly what Whisper heard.
+        Debug.Log("[DemoChat] TRANSCRIPT (voice): " + userPrompt);
+
         if (string.IsNullOrWhiteSpace(userPrompt))
+            return;
+
+        if (isGenerating)
         {
+            Debug.Log("[DemoChat] AI is already processing a request. Ignoring new voice request.");
             return;
         }
 
-        userPrompt =
-            userPrompt.Trim();
-
-
-        // -----------------------------------------------------
-        // DIRECT EXECUTION OF LAST ADVICE
-        // -----------------------------------------------------
-
-        if (
-            HasActionableAdvice() &&
-            IsExecutePreviousAdviceRequest(userPrompt)
-        )
-        {
-            ExecuteLastAdvice();
-            return;
-        }
-
-
-        // -----------------------------------------------------
-        // TRANSCRIPT
-        // -----------------------------------------------------
+        userPrompt = userPrompt.Trim();
 
         if (!IsUsableTranscript(userPrompt))
         {
-            SetOutput(
-                "I could not clearly understand the request."
-            );
-
+            SetOutput("I could not clearly understand the request. Please try again.");
             return;
         }
 
-        while (isGenerating)
-        {
-            await Task.Yield();
-        }
+        SpatialContext spatialContext = CaptureSpatialContext();
 
-        SpatialContext spatialContext =
-            CaptureSpatialContext();
+        if (TryHandleHelpRequest(userPrompt, spatialContext))
+            return;
 
-        TaskCompletionSource<bool>
-            completionSource =
-            new TaskCompletionSource<bool>();
+        TaskCompletionSource<bool> completionSource = new TaskCompletionSource<bool>();
 
-        StartCoroutine(
-            SendToOllama(
-                userPrompt,
-                spatialContext,
-                completionSource
-            )
-        );
+        StartCoroutine(SendToOllama(userPrompt, spatialContext, completionSource));
 
         await completionSource.Task;
+    }
+
+
+    // =========================================================
+    // HELP / ADVICE
+    // =========================================================
+
+    private static readonly Regex HelpPattern = new Regex(
+        @"^(help|help me|what can i do( here)?|what can you do|what can i say|" +
+        @"what can i make( here)?|what can i create( here)?|how does this work|" +
+        @"what are my options|what should i do)( now| here)?$",
+        RegexOptions.Compiled
+    );
+
+    private bool TryHandleHelpRequest(string userPrompt, SpatialContext context)
+    {
+        if (!enableHelpAndAdvice)
+            return false;
+
+        string normalized = NormalizeForIntent(userPrompt);
+
+        if (!HelpPattern.IsMatch(normalized))
+            return false;
+
+        SetOutput(BuildHelpText(context));
+        return true;
+    }
+
+    private string BuildHelpText(SpatialContext context)
+    {
+        StringBuilder builder = new StringBuilder();
+
+        if (showContextualHelpForWhatCanIDoHere)
+        {
+            List<string> contextual = new List<string>();
+
+            if (context.hasSelectedTree)
+            {
+                contextual.Add(
+                    "You are pointing at " + context.selectedTreeName + ":\n" +
+                    "  • \"Move this tree over there\"\n" +
+                    "  • \"Delete this tree\""
+                );
+            }
+
+            if (context.hasSelectedMountain)
+            {
+                contextual.Add(
+                    "You are pointing at " + context.selectedMountainName + ":\n" +
+                    "  • \"Make this mountain taller\" / \"shorter\"\n" +
+                    "  • \"Delete this mountain\""
+                );
+            }
+
+            if (context.hasSelectedRiver)
+            {
+                contextual.Add(
+                    "You are pointing at a river:\n" +
+                    "  • \"Make this river wider\" / \"narrower\" / \"deeper\" / \"shallower\"\n" +
+                    "  • \"Delete this river\""
+                );
+            }
+
+            if (context.hasSelectedLake)
+            {
+                contextual.Add(
+                    "You are pointing at a lake:\n" +
+                    "  • \"Make this lake wider\" / \"longer\" / \"deeper\"\n" +
+                    "  • \"Delete this lake\""
+                );
+            }
+
+            if (context.hasGroundPosition)
+            {
+                contextual.Add(
+                    "You are pointing at the ground:\n" +
+                    "  • \"Create a mountain here\"\n" +
+                    "  • \"Plant 10 palm trees here\"\n" +
+                    "  • \"Remove the trees here\""
+                );
+            }
+
+            if (contextual.Count > 0)
+            {
+                builder.AppendLine(string.Join("\n\n", contextual));
+                builder.AppendLine();
+                builder.AppendLine("You can also:");
+            }
+        }
+
+        builder.AppendLine("  • \"Create a mountain\" or \"Create 3 mountains\"");
+        builder.AppendLine("  • \"Create a river\" or \"Create a lake\"");
+        builder.AppendLine("  • \"Plant 20 oak trees\" (Oak, Palm, Birch, Maple, Eucalyptus, Apple, mixed)");
+        builder.AppendLine("  • \"Remove all trees\"");
+        builder.AppendLine("  • \"Reset the terrain\"");
+        builder.AppendLine();
+        builder.Append("You can combine requests: \"Create a mountain, a lake and 20 trees\".");
+
+        return builder.ToString();
+    }
+
+
+    // =========================================================
+    // NORMALIZE INTENT
+    // =========================================================
+
+    private string NormalizeForIntent(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+
+        string normalized = text.Trim().ToLowerInvariant();
+        normalized = Regex.Replace(normalized, @"[^\p{L}\p{N}\s]", " ");
+        normalized = Regex.Replace(normalized, @"\s+", " ");
+
+        return normalized.Trim();
+    }
+
+
+    // =========================================================
+    // TRANSCRIPT RULES (Round 2)
+    // =========================================================
+
+    private static readonly Regex CommandWordPattern = new Regex(
+        @"\b(create|make|build|add|plant|put|place|move|delete|remove|clear|reset|change|modify|edit|raise|lower|grow|" +
+        @"mountains?|hills?|rivers?|lakes?|trees?|forest|water|taller|shorter|higher|wider|narrower|deeper|shallower|longer|" +
+        @"help|what|how)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase
+    );
+
+    private static readonly Regex DeixisPattern = new Regex(
+        @"\b(here|there|this (spot|place|area|location)|that (spot|place|area|location)|where i('m| am) pointing)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase
+    );
+
+    private static readonly Regex NumberPattern = new Regex(
+        @"\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|single)\b|\ban? (\w+ )?tree\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase
+    );
+
+    private static readonly Regex TreeTypePattern = new Regex(
+        @"\b(oak|pine|palm|birch|maple|eucalyptus|apple|mixed)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase
+    );
+
+    private bool HasCommandWord(string transcript)
+    {
+        return CommandWordPattern.IsMatch(transcript ?? "");
+    }
+
+    // Returns the part of the request that mentions the given feature,
+    // so that "plant 30 trees and create a mountain here" applies "here"
+    // only to the mountain.
+    private string ClauseFor(string transcript, string featurePattern)
+    {
+        string[] clauses = Regex.Split(transcript ?? "", @",|\band\b|\bthen\b", RegexOptions.IgnoreCase);
+
+        foreach (string clause in clauses)
+        {
+            if (Regex.IsMatch(clause, featurePattern, RegexOptions.IgnoreCase))
+                return clause;
+        }
+
+        return transcript ?? "";
+    }
+
+    private void ApplyTranscriptRules(List<LandscapeCommand> commands, string transcript)
+    {
+        foreach (LandscapeCommand command in commands)
+        {
+            if (command == null)
+                continue;
+
+            // ---------------- TERRAIN CREATION ----------------
+
+            if (command.terrain != null && !string.IsNullOrWhiteSpace(command.terrain.action))
+            {
+                string action = command.terrain.action.Trim().ToLowerInvariant();
+                string feature =
+                    action.Contains("mountain") ? @"\bmountains?\b|\bhills?\b" :
+                    action.Contains("river") ? @"\brivers?\b" :
+                    action.Contains("lake") ? @"\blakes?\b" : null;
+
+                bool isCreation = feature != null &&
+                                  !action.Contains("modify") &&
+                                  !action.Contains("delete") &&
+                                  !action.Contains("remove");
+
+                if (isCreation && pointedPositionOnlyWithDeixis && command.terrain.usePointedPosition &&
+                    !DeixisPattern.IsMatch(ClauseFor(transcript, feature)))
+                {
+                    command.terrain.usePointedPosition = false;
+                    Debug.Log("[DemoChat] RULE: no 'here/there' for " + action + ", so the pointed position is not used.");
+                }
+            }
+
+            // ---------------- TREE PLANTING ----------------
+
+            if (command.trees != null && !string.IsNullOrWhiteSpace(command.trees.action))
+            {
+                string action = command.trees.action.Trim().ToLowerInvariant();
+
+                if (action == "plant" || action == "plant_trees" || action == "create_forest")
+                {
+                    string clause = ClauseFor(transcript, @"\btrees?\b|\bforest\b|\bplant");
+
+                    if (pointedPositionOnlyWithDeixis && command.trees.usePointedPosition && !DeixisPattern.IsMatch(clause))
+                    {
+                        command.trees.usePointedPosition = false;
+                        Debug.Log("[DemoChat] RULE: no 'here/there' for planting, so the pointed position is not used.");
+                    }
+
+                    if (!NumberPattern.IsMatch(clause) && command.trees.count != defaultTreeCount)
+                    {
+                        Debug.Log("[DemoChat] RULE: no number given, tree count " + command.trees.count + " -> " + defaultTreeCount + ".");
+                        command.trees.count = defaultTreeCount;
+                    }
+
+                    if (!TreeTypePattern.IsMatch(clause) &&
+                        !string.Equals(command.trees.treeType, "Mixed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Debug.Log("[DemoChat] RULE: no tree type given, '" + command.trees.treeType + "' -> Mixed.");
+                        command.trees.treeType = "Mixed";
+                    }
+                }
+            }
+        }
     }
 
 
@@ -369,38 +521,26 @@ public class DemoChat : MonoBehaviour
     private bool IsUsableTranscript(string transcript)
     {
         if (string.IsNullOrWhiteSpace(transcript))
-        {
             return false;
-        }
 
-        string text =
-            transcript.Trim();
+        string text = transcript.Trim();
 
         if (text.Length < 2)
-        {
             return false;
-        }
 
-        string withoutPunctuation =
-            Regex.Replace(
-                text,
-                @"[\p{P}\p{S}\d]",
-                ""
-            );
+        string withoutPunctuation = Regex.Replace(text, @"[\p{P}\p{S}\d]", "");
 
         if (string.IsNullOrWhiteSpace(withoutPunctuation))
-        {
             return false;
-        }
 
-        if (
-            text.Length >= 5 &&
-            Regex.IsMatch(
-                text,
-                @"^(.)\1{4,}$"
-            )
-        )
+        if (text.Length >= 5 && Regex.IsMatch(text, @"^(.)\1{4,}$"))
+            return false;
+
+        // Round 2: misheard speech such as "Ayesha. Ayesha." contains no
+        // command word and is not sent to the model.
+        if (requireCommandWord && !HasCommandWord(text))
         {
+            Debug.Log("[DemoChat] RULE: transcript has no command word, not executed: " + text);
             return false;
         }
 
@@ -409,662 +549,143 @@ public class DemoChat : MonoBehaviour
 
 
     // =========================================================
-    // CONFIRMATION YES
-    // =========================================================
-
-    private bool IsConfirmationYes(string text)
-    {
-        string normalized =
-            text.Trim().ToLowerInvariant();
-
-        return
-            normalized == "yes" ||
-            normalized == "yeah" ||
-            normalized == "yep" ||
-            normalized == "sure" ||
-            normalized == "okay" ||
-            normalized == "ok" ||
-            normalized == "confirm" ||
-            normalized == "do it" ||
-            normalized == "do that" ||
-            normalized == "do it too" ||
-            normalized == "go ahead" ||
-            normalized == "that's right" ||
-            normalized == "correct";
-    }
-
-
-    // =========================================================
-    // CONFIRMATION NO
-    // =========================================================
-
-    private bool IsConfirmationNo(string text)
-    {
-        string normalized =
-            text.Trim().ToLowerInvariant();
-
-        return
-            normalized == "no" ||
-            normalized == "nope" ||
-            normalized == "cancel" ||
-            normalized == "stop" ||
-            normalized == "don't" ||
-            normalized == "do not";
-    }
-
-
-    // =========================================================
-    // PREVIOUS ADVICE EXECUTION REQUEST
-    // =========================================================
-
-    private bool IsExecutePreviousAdviceRequest(
-        string text
-    )
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return false;
-        }
-
-        string normalized =
-            text.Trim().ToLowerInvariant();
-
-        return
-            normalized == "do it" ||
-            normalized == "do that" ||
-            normalized == "do it too" ||
-            normalized == "do that too" ||
-            normalized == "go ahead" ||
-            normalized == "apply that" ||
-            normalized == "apply it" ||
-            normalized == "make it happen" ||
-            normalized == "make that happen" ||
-            normalized == "yes, do it" ||
-            normalized == "yes do it" ||
-            normalized == "yes, do that" ||
-            normalized == "yes do that";
-    }
-
-
-    // =========================================================
-    // HAS ACTIONABLE ADVICE
-    // =========================================================
-
-    private bool HasActionableAdvice()
-    {
-        return
-            lastAdviceCommand != null &&
-            !string.IsNullOrWhiteSpace(
-                lastAdviceCommand.commandType
-            );
-    }
-
-
-    // =========================================================
-    // EXECUTE LAST ADVICE
-    // =========================================================
-
-    private void ExecuteLastAdvice()
-    {
-        if (!HasActionableAdvice())
-        {
-            SetOutput(
-                "I do not have a previous actionable recommendation to apply."
-            );
-
-            return;
-        }
-
-        LandscapeCommand command =
-            CloneCommand(
-                lastAdviceCommand
-            );
-
-        SpatialContext spatialContext =
-            CaptureSpatialContext();
-
-        SetOutput(
-            "Applying my previous recommendation..."
-        );
-
-        bool success =
-            ExecuteValidatedCommand(
-                command,
-                spatialContext
-            );
-
-        if (success)
-        {
-            AddConversationTurn(
-                "Do it.",
-                "Applied the previous recommendation: " +
-                DescribeCommand(command)
-            );
-
-            // Clear the recommendation after execution.
-            lastAdviceCommand = null;
-            lastAdviceText = "";
-        }
-        else
-        {
-            AddConversationTurn(
-                "Do it.",
-                "The previous recommendation could not be executed."
-            );
-        }
-    }
-
-
-    // =========================================================
-    // CLONE COMMAND
-    // =========================================================
-
-    private LandscapeCommand CloneCommand(
-        LandscapeCommand source
-    )
-    {
-        if (source == null)
-        {
-            return null;
-        }
-
-        LandscapeCommand clone =
-            new LandscapeCommand();
-
-        clone.commandType =
-            source.commandType;
-
-        clone.confidence =
-            source.confidence;
-
-        clone.reason =
-            source.reason;
-
-        clone.assistantMessage =
-            source.assistantMessage;
-
-
-        if (source.terrain != null)
-        {
-            clone.terrain =
-                new TerrainCommand();
-
-            clone.terrain.action =
-                source.terrain.action;
-
-            clone.terrain.count =
-                source.terrain.count;
-
-            clone.terrain.heightChange =
-                source.terrain.heightChange;
-        }
-
-
-        if (source.trees != null)
-        {
-            clone.trees =
-                new TreeCommand();
-
-            clone.trees.action =
-                source.trees.action;
-
-            clone.trees.treeType =
-                source.trees.treeType;
-
-            clone.trees.count =
-                source.trees.count;
-
-            clone.trees.centerX =
-                source.trees.centerX;
-
-            clone.trees.centerZ =
-                source.trees.centerZ;
-
-            clone.trees.radius =
-                source.trees.radius;
-
-            clone.trees.spacing =
-                source.trees.spacing;
-        }
-
-
-        if (source.building != null)
-        {
-            clone.building =
-                new BuildingCommand();
-
-            clone.building.action =
-                source.building.action;
-
-            clone.building.buildingType =
-                source.building.buildingType;
-
-            clone.building.count =
-                source.building.count;
-        }
-
-
-        if (source.water != null)
-        {
-            clone.water =
-                new WaterCommand();
-
-            clone.water.action =
-                source.water.action;
-        }
-
-
-        return clone;
-    }
-
-
-    // =========================================================
-    // CONFIRM
-    // =========================================================
-
-    private void ConfirmPendingCommand()
-    {
-        if (
-            !hasPendingConfirmation ||
-            pendingCommand == null
-        )
-        {
-            SetOutput(
-                "There is nothing waiting for confirmation."
-            );
-
-            return;
-        }
-
-        LandscapeCommand command =
-            pendingCommand;
-
-        SpatialContext spatialContext =
-            pendingSpatialContext;
-
-        ClearPendingConfirmation();
-
-        SetOutput(
-            "Confirmed. Executing the request..."
-        );
-
-        bool success =
-            ExecuteValidatedCommand(
-                command,
-                spatialContext
-            );
-
-        if (!success)
-        {
-            Debug.LogWarning(
-                "[DemoChat] Confirmed command failed."
-            );
-        }
-    }
-
-
-    // =========================================================
-    // CANCEL
-    // =========================================================
-
-    private void CancelPendingCommand()
-    {
-        ClearPendingConfirmation();
-
-        SetOutput(
-            "Okay. I cancelled that action."
-        );
-    }
-
-
-    // =========================================================
-    // CLEAR CONFIRMATION
-    // =========================================================
-
-    private void ClearPendingConfirmation()
-    {
-        hasPendingConfirmation = false;
-        pendingCommand = null;
-        pendingSpatialContext = null;
-    }
-
-
-    // =========================================================
-    // SPATIAL CONTEXT
+    // CAPTURE SPATIAL CONTEXT
     // =========================================================
 
     private SpatialContext CaptureSpatialContext()
     {
-        SpatialContext context =
-            new SpatialContext();
+        SpatialContext context = new SpatialContext();
 
-
-        // =====================================================
-        // TREE + CURRENT TERRAIN GROUND POSITION
-        // =====================================================
+        // ---------------- TREE + GROUND ----------------
 
         if (treePointingDetector != null)
         {
-            TreeSelectable selectedTree =
-                treePointingDetector.GetSelectedTree();
+            TreeSelectable selectedTree = treePointingDetector.GetSelectedTree();
 
             if (selectedTree != null)
             {
                 context.hasSelectedTree = true;
+                context.selectedTreeIndex = selectedTree.treeIndex;
+                context.selectedTreeName = selectedTree.GetTreeName();
 
-                context.selectedTreeIndex =
-                    selectedTree.treeIndex;
-
-                context.selectedTreeName =
-                    selectedTree.GetTreeName();
-
-                TreeTypeInfo typeInfo =
-                    selectedTree.GetComponent<TreeTypeInfo>();
-
-                if (typeInfo != null)
-                {
-                    context.selectedTreeType =
-                        typeInfo.GetTreeType();
-                }
-                else
-                {
-                    context.selectedTreeType =
-                        "Unknown";
-                }
+                TreeTypeInfo typeInfo = selectedTree.GetComponent<TreeTypeInfo>();
+                context.selectedTreeType = typeInfo != null ? typeInfo.GetTreeType() : "Unknown";
             }
-
-
-            // =================================================
-            // CURRENT POINTED TERRAIN POSITION
-            // =================================================
 
             Vector3 groundPosition;
 
-            if (
-                treePointingDetector.TryGetGroundPosition(
-                    out groundPosition
-                )
-            )
+            if (treePointingDetector.TryGetGroundPosition(out groundPosition))
             {
                 context.hasGroundPosition = true;
-
-                context.groundPosition =
-                    groundPosition;
+                context.groundPosition = groundPosition;
             }
         }
 
+        // ---------------- MOUNTAIN ----------------
+
+        if (mountainPointingDetector != null)
+        {
+            int mountainId;
+
+            if (mountainPointingDetector.TryGetSelectedMountainId(out mountainId))
+            {
+                context.hasSelectedMountain = true;
+                context.selectedMountainIndex = mountainId;
+
+                TerrainGenerator.MountainInfo mountain = mountainPointingDetector.GetSelectedMountain();
+
+                context.selectedMountainName =
+                    mountain != null && !string.IsNullOrWhiteSpace(mountain.name)
+                        ? mountain.name
+                        : "the selected mountain";
+            }
+        }
+
+        // ---------------- WATER ----------------
+
+        if (waterPointingDetector != null)
+        {
+            int riverId = waterPointingDetector.GetSelectedRiverId();
+
+            if (riverId > 0)
+            {
+                context.hasSelectedRiver = true;
+                context.selectedRiverId = riverId;
+            }
+
+            int lakeId = waterPointingDetector.GetSelectedLakeId();
+
+            if (lakeId > 0)
+            {
+                context.hasSelectedLake = true;
+                context.selectedLakeId = lakeId;
+            }
+        }
+
+        Debug.Log("[DemoChat] CONTEXT: tree=" + (context.hasSelectedTree ? context.selectedTreeIndex + " (" + context.selectedTreeType + ")" : "none") +
+                  " | mountain=" + (context.hasSelectedMountain ? context.selectedMountainIndex.ToString() : "none") +
+                  " | river=" + (context.hasSelectedRiver ? context.selectedRiverId.ToString() : "none") +
+                  " | lake=" + (context.hasSelectedLake ? context.selectedLakeId.ToString() : "none") +
+                  " | ground=" + (context.hasGroundPosition ? context.groundPosition.ToString("F1") : "none"));
 
         return context;
     }
 
 
     // =========================================================
-    // SPATIAL TEXT
+    // SPATIAL CONTEXT TEXT (SENT TO THE AI)
     // =========================================================
 
-    private string BuildSpatialContext(
-        SpatialContext context
-    )
+    private string BuildSpatialContext(SpatialContext context)
     {
-        StringBuilder builder =
-            new StringBuilder();
+        StringBuilder builder = new StringBuilder();
 
-        builder.AppendLine(
-            "XR SPATIAL CONTEXT:"
-        );
-
-        builder.AppendLine(
-            "This information comes directly from Unity."
-        );
-
+        builder.AppendLine("XR SPATIAL CONTEXT:");
+        builder.AppendLine("This information comes directly from Unity.");
         builder.AppendLine();
 
-
-        // =====================================================
-        // TREE
-        // =====================================================
-
+        // Tree (no name or ID is sent to the LLM; Unity keeps the selection)
         if (context.hasSelectedTree)
         {
-            builder.AppendLine(
-                "Selected tree: " +
-                context.selectedTreeName
-            );
-
-            builder.AppendLine(
-                "Selected tree ID: " +
-                context.selectedTreeIndex
-            );
-
-            builder.AppendLine(
-                "Selected tree type: " +
-                context.selectedTreeType
-            );
+            builder.AppendLine("Selected tree: yes");
+            builder.AppendLine("Selected tree type: " + context.selectedTreeType);
         }
         else
         {
-            builder.AppendLine(
-                "Selected tree: none"
-            );
+            builder.AppendLine("Selected tree: none");
         }
 
+        // Ground
+        builder.AppendLine(
+            "Pointing at terrain: " + (context.hasGroundPosition ? "true" : "false")
+        );
 
-        // =====================================================
-        // CURRENT POINTED TERRAIN POSITION
-        // =====================================================
+        // Mountain
+        builder.AppendLine(
+            context.hasSelectedMountain
+                ? "Selected mountain: yes"
+                : "Selected mountain: none"
+        );
+
+        // Water
+        builder.AppendLine(context.hasSelectedRiver ? "Selected river: yes" : "Selected river: none");
+        builder.AppendLine(context.hasSelectedLake ? "Selected lake: yes" : "Selected lake: none");
 
         builder.AppendLine();
-
-        builder.AppendLine(
-            "CURRENT POINTED TERRAIN POSITION:"
-        );
-
-        builder.AppendLine(
-            "This Unity-provided position can be used as the spatial reference for mountain modification and tree movement."
-        );
-
-        if (context.hasGroundPosition)
-        {
-            Vector3 p =
-                context.groundPosition;
-
-            builder.AppendLine(
-                "Pointing at terrain: true"
-            );
-
-            builder.AppendLine(
-                "Current ground position X: " +
-                p.x.ToString("F3")
-            );
-
-            builder.AppendLine(
-                "Current ground position Y: " +
-                p.y.ToString("F3")
-            );
-
-            builder.AppendLine(
-                "Current ground position Z: " +
-                p.z.ToString("F3")
-            );
-        }
-        else
-        {
-            builder.AppendLine(
-                "Pointing at terrain: false"
-            );
-        }
-
-
-        // =====================================================
-        // SPATIAL RULES
-        // =====================================================
-
-        builder.AppendLine();
-
-        builder.AppendLine(
-            "SPATIAL RULES:"
-        );
-
-        builder.AppendLine(
-            "Unity provides selected tree information."
-        );
-
-        builder.AppendLine(
-            "Unity provides the current pointed Terrain ground position."
-        );
-
-        builder.AppendLine(
-            "The current pointed Terrain ground position is the ONLY location reference for mountain modification."
-        );
-
-        builder.AppendLine(
-            "The same current pointed Terrain ground position can be used for tree movement destinations."
-        );
-
-        builder.AppendLine(
-            "This works for BOTH mountains that already existed on the Terrain and mountains generated by Unity."
-        );
-
-        builder.AppendLine(
-            "Mountain IDs are NOT required."
-        );
-
-        builder.AppendLine(
-            "Mountain IDs are NOT used for mountain modification."
-        );
-
-        builder.AppendLine(
-            "The AI MUST NOT invent tree IDs."
-        );
-
-        builder.AppendLine(
-            "The AI MUST NOT invent movement coordinates."
-        );
-
-        builder.AppendLine(
-            "For 'this tree', use the selected tree."
-        );
-
-        builder.AppendLine(
-            "For 'this mountain', use the CURRENT pointed Terrain ground position."
-        );
-
-        builder.AppendLine(
-            "For 'it', use the currently selected object when the reference is clear."
-        );
-
-        builder.AppendLine(
-            "For 'over there', use the Unity-provided pointed position."
-        );
-
-        builder.AppendLine(
-            "Buildings use BuildingGenerator's random terrain placement."
-        );
-
-        builder.AppendLine(
-            "Water uses WaterManager's own safe placement logic."
-        );
+        builder.AppendLine("SPATIAL RULES:");
+        builder.AppendLine("Unity owns all object IDs and all coordinates. Never put IDs or coordinates in the JSON.");
+        builder.AppendLine("For 'this tree', 'this mountain', 'this river', 'this lake' or 'it', use the matching selected object.");
+        builder.AppendLine("If the referenced object is 'none' above, return unknown.");
+        builder.AppendLine("For 'here', 'there', 'over there' or 'where I am pointing', set usePointedPosition to true.");
+        builder.AppendLine("If 'Pointing at terrain' is false and the user says 'here' or 'there', return unknown.");
+        builder.AppendLine("The pointed ground position is never used to identify a mountain.");
 
         return builder.ToString();
     }
 
 
     // =========================================================
-    // CONVERSATION CONTEXT
-    // =========================================================
-
-    private string BuildConversationContext()
-    {
-        if (
-            !useConversationHistory ||
-            conversationHistory == null ||
-            conversationHistory.Count == 0
-        )
-        {
-            return
-                "There is no previous conversation context.";
-        }
-
-        StringBuilder builder =
-            new StringBuilder();
-
-        builder.AppendLine(
-            "RECENT CONVERSATION SUMMARY:"
-        );
-
-        int startIndex =
-            Mathf.Max(
-                0,
-                conversationHistory.Count -
-                maximumConversationTurns
-            );
-
-        for (
-            int i = startIndex;
-            i < conversationHistory.Count;
-            i++
-        )
-        {
-            ConversationTurn turn =
-                conversationHistory[i];
-
-            builder.AppendLine(
-                "User: " +
-                turn.userMessage
-            );
-
-            builder.AppendLine(
-                "Assistant: " +
-                turn.assistantResult
-            );
-
-            builder.AppendLine();
-        }
-
-        return builder.ToString();
-    }
-
-
-    // =========================================================
-    // ADD CONVERSATION TURN
-    // =========================================================
-
-    private void AddConversationTurn(
-        string userMessage,
-        string assistantResult
-    )
-    {
-        if (!useConversationHistory)
-        {
-            return;
-        }
-
-        if (conversationHistory == null)
-        {
-            conversationHistory =
-                new List<ConversationTurn>();
-        }
-
-        conversationHistory.Add(
-            new ConversationTurn
-            {
-                userMessage = userMessage,
-                assistantResult = assistantResult
-            }
-        );
-
-        while (
-            conversationHistory.Count >
-            maximumConversationTurns
-        )
-        {
-            conversationHistory.RemoveAt(0);
-        }
-    }
-
-
-    // =========================================================
-    // OLLAMA
+    // SEND TO OLLAMA
     // =========================================================
 
     private IEnumerator SendToOllama(
@@ -1073,517 +694,420 @@ public class DemoChat : MonoBehaviour
         TaskCompletionSource<bool> completionSource
     )
     {
-        if (isGenerating)
-        {
-            while (isGenerating)
-            {
-                yield return null;
-            }
-        }
+        while (isGenerating)
+            yield return null;
 
         isGenerating = true;
-
         SetButtonInteractable(false);
-
-        SetOutput(
-            "AI is thinking..."
-        );
-
-
-        string systemPrompt =
-            BuildSystemPrompt();
-
-        string spatialText =
-            BuildSpatialContext(
-                spatialContext
-            );
-
-        string conversationText =
-            BuildConversationContext();
-
-
-        // =====================================================
-        // CURRENT USER MESSAGE
-        // =====================================================
+        SetOutput("AI is thinking...");
 
         string userMessage =
-            "USER REQUEST:\n" +
-            userPrompt +
-            "\n\n" +
-            spatialText +
-            "\n\n" +
-            conversationText;
+            "USER REQUEST:\n" + userPrompt + "\n\n" + BuildSpatialContext(spatialContext);
 
-
-        // =====================================================
-        // BUILD ACTUAL OLLAMA CONVERSATION
-        // =====================================================
-
-        List<OllamaMessage> messages =
-            new List<OllamaMessage>();
-
-
-        // SYSTEM
-
-        messages.Add(
-            new OllamaMessage
-            {
-                role = "system",
-                content = systemPrompt
-            }
-        );
-
-
-        // PREVIOUS CONVERSATION
-
-        if (
-            useConversationHistory &&
-            conversationHistory != null
-        )
+        OllamaRequest request = new OllamaRequest
         {
-            int startIndex =
-                Mathf.Max(
-                    0,
-                    conversationHistory.Count -
-                    maximumConversationTurns
-                );
-
-            for (
-                int i = startIndex;
-                i < conversationHistory.Count;
-                i++
-            )
+            model = demoModel,
+            stream = false,
+            think = !disableModelThinking,
+            format = "json",
+            messages = new OllamaMessage[]
             {
-                ConversationTurn turn =
-                    conversationHistory[i];
-
-                messages.Add(
-                    new OllamaMessage
-                    {
-                        role = "user",
-                        content =
-                            turn.userMessage
-                    }
-                );
-
-                messages.Add(
-                    new OllamaMessage
-                    {
-                        role = "assistant",
-                        content =
-                            turn.assistantResult
-                    }
-                );
+                new OllamaMessage { role = "system", content = BuildSystemPrompt() },
+                new OllamaMessage { role = "user", content = userMessage }
             }
-        }
+        };
 
+        byte[] body = Encoding.UTF8.GetBytes(JsonUtility.ToJson(request));
 
-        // CURRENT REQUEST
-
-        messages.Add(
-            new OllamaMessage
-            {
-                role = "user",
-                content = userMessage
-            }
-        );
-
-
-        // =====================================================
-        // REQUEST
-        // =====================================================
-
-        OllamaRequest request =
-            new OllamaRequest();
-
-        request.model =
-            demoModel;
-
-        request.stream =
-            false;
-
-        request.messages =
-            messages.ToArray();
-
-
-        string json =
-            JsonUtility.ToJson(request);
-
-        byte[] body =
-            Encoding.UTF8.GetBytes(json);
-
-
-        using (
-            UnityWebRequest webRequest =
-                new UnityWebRequest(
-                    ollamaUrl,
-                    "POST"
-                )
-        )
+        using (UnityWebRequest webRequest = new UnityWebRequest(ollamaUrl, "POST"))
         {
-            webRequest.uploadHandler =
-                new UploadHandlerRaw(body);
-
-            webRequest.downloadHandler =
-                new DownloadHandlerBuffer();
-
-            webRequest.SetRequestHeader(
-                "Content-Type",
-                "application/json"
-            );
+            webRequest.uploadHandler = new UploadHandlerRaw(body);
+            webRequest.downloadHandler = new DownloadHandlerBuffer();
+            webRequest.SetRequestHeader("Content-Type", "application/json");
 
             yield return webRequest.SendWebRequest();
 
+            // ---------------- CONNECTION ----------------
 
-            // -------------------------------------------------
-            // CONNECTION ERROR
-            // -------------------------------------------------
-
-            if (
-                webRequest.result !=
-                UnityWebRequest.Result.Success
-            )
+            if (webRequest.result != UnityWebRequest.Result.Success)
             {
-                SetOutput(
-                    "Could not connect to Ollama.\n\n" +
-                    webRequest.error
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
+                SetOutput("Could not connect to Ollama.\n\n" + webRequest.error);
+                FinishRequest(completionSource, false);
                 yield break;
             }
 
+            // ---------------- RESPONSE ----------------
 
-            string response =
-                webRequest.downloadHandler.text;
-
-            OllamaResponse ollamaResponse =
-                null;
+            OllamaResponse ollamaResponse = null;
 
             try
             {
-                ollamaResponse =
-                    JsonUtility.FromJson<OllamaResponse>(
-                        response
-                    );
+                ollamaResponse = JsonUtility.FromJson<OllamaResponse>(webRequest.downloadHandler.text);
             }
             catch (Exception exception)
             {
                 Debug.LogError(exception);
-
-                SetOutput(
-                    "Invalid response from Ollama."
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
+                SetOutput("Invalid response from Ollama.");
+                FinishRequest(completionSource, false);
                 yield break;
             }
 
-
-            if (
-                ollamaResponse == null ||
-                ollamaResponse.message == null
-            )
+            if (ollamaResponse == null || ollamaResponse.message == null)
             {
-                SetOutput(
-                    "Ollama returned no message."
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
+                SetOutput("Ollama returned no message.");
+                FinishRequest(completionSource, false);
                 yield break;
             }
 
+            string llmContent = ollamaResponse.message.content;
+            Debug.Log("[DemoChat] LLM:\n" + llmContent);
 
-            string llmContent =
-                ollamaResponse.message.content;
+            // ---------------- JSON ----------------
 
-            Debug.Log(
-                "[DemoChat] LLM:\n" +
-                llmContent
-            );
-
-
-            // -------------------------------------------------
-            // JSON
-            // -------------------------------------------------
-
-            string commandJson =
-                ExtractJson(llmContent);
+            string commandJson = ExtractJson(llmContent);
 
             if (string.IsNullOrEmpty(commandJson))
             {
-                SetOutput(
-                    "I could not understand the AI response."
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
+                SetOutput("I could not understand the AI response.");
+                FinishRequest(completionSource, false);
                 yield break;
             }
 
+            List<LandscapeCommand> commands;
+            string parseError;
 
-            LandscapeCommand command =
-                null;
-
-            try
+            if (!TryParseCommands(commandJson, out commands, out parseError))
             {
-                command =
-                    JsonUtility.FromJson<LandscapeCommand>(
-                        commandJson
+                SetOutput(parseError);
+                FinishRequest(completionSource, false);
+                yield break;
+            }
+
+            if (commands == null || commands.Count == 0)
+            {
+                SetOutput("The AI returned no commands.");
+                FinishRequest(completionSource, false);
+                yield break;
+            }
+
+            Debug.Log("[DemoChat] Number of commands = " + commands.Count);
+
+            // ---------------- UNKNOWN / UNCLEAR ----------------
+
+            foreach (LandscapeCommand command in commands)
+            {
+                PrepareCommandType(command);
+
+                if (IsUnknownType(command.commandType))
+                {
+                    HandleUnknownCommand(command);
+                    FinishRequest(completionSource, false);
+                    yield break;
+                }
+            }
+
+            // ---------------- TRANSCRIPT RULES ----------------
+
+            ApplyTranscriptRules(commands, userPrompt);
+
+            // ---------------- VALIDATE ----------------
+
+            List<string> validationErrors = new List<string>();
+
+            for (int i = 0; i < commands.Count; i++)
+            {
+                string validationError;
+
+                if (!ValidateCommand(commands[i], out validationError))
+                {
+                    validationErrors.Add(
+                        (commands.Count > 1 ? "Command " + (i + 1) + ": " : "") + validationError
                     );
+                }
             }
-            catch (Exception exception)
+
+            if (validationErrors.Count > 0)
             {
-                Debug.LogError(exception);
-
-                SetOutput(
-                    "The AI command could not be parsed."
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
+                SetOutput(string.Join("\n", validationErrors));
+                FinishRequest(completionSource, false);
                 yield break;
             }
 
+            // ---------------- CONFIDENCE ----------------
 
-            if (command == null)
+            bool anyMediumConfidence = false;
+
+            foreach (LandscapeCommand command in commands)
             {
-                SetOutput(
-                    "The AI returned an empty command."
-                );
+                ConfidenceLevel level = GetConfidenceLevel(command);
 
-                FinishRequest(
-                    completionSource,
-                    false
-                );
+                if (level == ConfidenceLevel.Low)
+                {
+                    string reason = string.IsNullOrWhiteSpace(command.reason)
+                        ? ""
+                        : "\n\n(" + command.reason + ")";
 
-                yield break;
-            }
-
-
-            // -------------------------------------------------
-            // COMMAND TYPE
-            // -------------------------------------------------
-
-            string commandType =
-                command.commandType;
-
-            if (
-                string.IsNullOrWhiteSpace(
-                    commandType
-                )
-            )
-            {
-                commandType =
-                    DetectCommandType(
-                        commandJson
+                    SetOutput(
+                        "I'm not sure I understood. Did you want to " +
+                        DescribeCommand(command, spatialContext) +
+                        "? Please rephrase the request more specifically." +
+                        reason
                     );
+
+                    FinishRequest(completionSource, false);
+                    yield break;
+                }
+
+                if (level == ConfidenceLevel.Medium)
+                    anyMediumConfidence = true;
             }
 
-            commandType =
-                commandType
-                    .Trim()
-                    .ToLowerInvariant();
+            // ---------------- EXECUTE ----------------
 
-            command.commandType =
-                commandType;
+            List<string> successfulCommands = new List<string>();
+            List<string> failedCommands = new List<string>();
 
-
-            Debug.Log(
-                "[DemoChat] Command type = " +
-                commandType
-            );
-
-            Debug.Log(
-                "[DemoChat] Confidence = " +
-                command.confidence.ToString("F2")
-            );
-
-            Debug.Log(
-                "[DemoChat] Reason = " +
-                command.reason
-            );
-
-
-            // -------------------------------------------------
-            // VALIDATION
-            // -------------------------------------------------
-
-            string validationError;
-
-            if (
-                !ValidateCommand(
-                    command,
-                    spatialContext,
-                    out validationError
-                )
-            )
+            for (int i = 0; i < commands.Count; i++)
             {
-                SetOutput(
-                    validationError
+                LandscapeCommand command = commands[i];
+
+                // Describe before executing: execution may clear selections.
+                string description = DescribeCommand(command, spatialContext);
+
+                Debug.Log(
+                    "[DemoChat] Executing command " + (i + 1) + "/" + commands.Count + ": " + description
                 );
 
-                FinishRequest(
-                    completionSource,
-                    false
-                );
+                if (ExecuteValidatedCommand(command, spatialContext))
+                    successfulCommands.Add(description);
+                else
+                    failedCommands.Add(description);
 
+                // Give Unity one frame between procedural generation steps.
+                yield return null;
+            }
+
+            // ---------------- RESULT ----------------
+
+            if (commands.Count == 1)
+            {
+                // On failure the Process* method has already written the reason.
+                if (successfulCommands.Count == 1)
+                {
+                    SetOutput(
+                        anyMediumConfidence
+                            ? "I think you wanted to " + successfulCommands[0] + ". Done."
+                            : "Done: " + successfulCommands[0] + "."
+                    );
+                }
+
+                FinishRequest(completionSource, successfulCommands.Count == 1);
                 yield break;
             }
 
+            StringBuilder result = new StringBuilder();
 
-            // -------------------------------------------------
-            // ADVICE
-            // -------------------------------------------------
-
-            if (commandType == "advice")
-            {
-                HandleAdvice(
-                    command
-                );
-
-                string adviceResult =
-                    string.IsNullOrWhiteSpace(
-                        command.assistantMessage
-                    )
-                        ? command.reason
-                        : command.assistantMessage;
-
-                AddConversationTurn(
-                    userPrompt,
-                    adviceResult
-                );
-
-                FinishRequest(
-                    completionSource,
-                    true
-                );
-
-                yield break;
-            }
-
-
-            // -------------------------------------------------
-            // UNKNOWN
-            // -------------------------------------------------
-
-            if (
-                commandType == "unknown" ||
-                commandType == "unclear" ||
-                commandType == "ambiguous"
-            )
-            {
-                HandleUnknownCommand(command);
-
-                AddConversationTurn(
-                    userPrompt,
-                    command.reason
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
-                yield break;
-            }
-
-
-            // -------------------------------------------------
-            // CONFIDENCE
-            // -------------------------------------------------
-
-            float confidence =
-                Mathf.Clamp01(
-                    command.confidence
-                );
-
-
-            if (
-                confidence <
-                mediumConfidenceThreshold
-            )
-            {
-                HandleLowConfidence(command);
-
-                AddConversationTurn(
-                    userPrompt,
-                    command.reason
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
-                yield break;
-            }
-
-
-            if (
-                confidence <
-                highConfidenceThreshold
-            )
-            {
-                HandleMediumConfidence(
-                    command,
-                    spatialContext
-                );
-
-                AddConversationTurn(
-                    userPrompt,
-                    DescribeCommand(command)
-                );
-
-                FinishRequest(
-                    completionSource,
-                    false
-                );
-
-                yield break;
-            }
-
-
-            // -------------------------------------------------
-            // HIGH CONFIDENCE
-            // -------------------------------------------------
-
-            bool success =
-                ExecuteValidatedCommand(
-                    command,
-                    spatialContext
-                );
-
-            AddConversationTurn(
-                userPrompt,
-                success
-                    ? DescribeCommand(command)
-                    : "The requested action could not be executed."
+            result.AppendLine(
+                successfulCommands.Count == commands.Count
+                    ? "Completed " + commands.Count + " requests:"
+                    : "Completed " + successfulCommands.Count + " of " + commands.Count + " requests:"
             );
 
-            FinishRequest(
-                completionSource,
-                success
-            );
+            foreach (string description in successfulCommands)
+                result.AppendLine("• " + description);
+
+            if (failedCommands.Count > 0)
+            {
+                result.AppendLine();
+                result.AppendLine("Could not complete:");
+
+                foreach (string description in failedCommands)
+                    result.AppendLine("• " + description);
+            }
+
+            if (anyMediumConfidence)
+            {
+                result.AppendLine();
+                result.AppendLine("Some of these were my best interpretation of your request.");
+            }
+
+            SetOutput(result.ToString().TrimEnd());
+            FinishRequest(completionSource, failedCommands.Count == 0);
         }
+    }
+
+
+    // =========================================================
+    // CONFIDENCE
+    // =========================================================
+
+    private enum ConfidenceLevel
+    {
+        High,
+        Medium,
+        Low
+    }
+
+    private ConfidenceLevel GetConfidenceLevel(LandscapeCommand command)
+    {
+        // JsonUtility leaves a missing field at 0. Treat "not provided" as
+        // medium so a model that forgets the field is not blocked entirely.
+        if (command.confidence <= 0f)
+        {
+            Debug.LogWarning("[DemoChat] Command has no confidence value; treating as medium.");
+            return ConfidenceLevel.Medium;
+        }
+
+        if (command.confidence >= highConfidenceThreshold)
+            return ConfidenceLevel.High;
+
+        if (command.confidence >= mediumConfidenceThreshold)
+            return ConfidenceLevel.Medium;
+
+        return ConfidenceLevel.Low;
+    }
+
+
+    // =========================================================
+    // UNKNOWN COMMAND
+    // =========================================================
+
+    private bool IsUnknownType(string commandType)
+    {
+        return commandType == "unknown" ||
+               commandType == "unclear" ||
+               commandType == "ambiguous";
+    }
+
+    private void HandleUnknownCommand(LandscapeCommand command)
+    {
+        string message = "I could not determine what you want me to do.";
+
+        if (command != null && !string.IsNullOrWhiteSpace(command.reason))
+            message = command.reason;
+
+        if (enableHelpAndAdvice)
+            message += "\n\nSay \"What can I do here?\" for suggestions.";
+
+        SetOutput(message);
+    }
+
+
+    // =========================================================
+    // PARSE ONE OR MANY COMMANDS
+    // =========================================================
+
+    private bool TryParseCommands(
+        string commandJson,
+        out List<LandscapeCommand> commands,
+        out string error
+    )
+    {
+        commands = new List<LandscapeCommand>();
+        error = "";
+
+        if (string.IsNullOrWhiteSpace(commandJson))
+        {
+            error = "The AI returned empty JSON.";
+            return false;
+        }
+
+        // Multi-command wrapper
+        try
+        {
+            MultiLandscapeCommand multi = JsonUtility.FromJson<MultiLandscapeCommand>(commandJson);
+
+            if (multi != null && multi.commands != null && multi.commands.Length > 0)
+            {
+                foreach (LandscapeCommand command in multi.commands)
+                {
+                    if (command == null)
+                    {
+                        error = "The AI returned an empty command inside the multi-command request.";
+                        return false;
+                    }
+
+                    commands.Add(command);
+                }
+
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning("[DemoChat] Multi-command parsing failed: " + exception.Message);
+        }
+
+        // Single command
+        try
+        {
+            LandscapeCommand single = JsonUtility.FromJson<LandscapeCommand>(commandJson);
+
+            if (single == null)
+            {
+                error = "The AI returned an empty command.";
+                return false;
+            }
+
+            commands.Add(single);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError(exception);
+            error = "The AI command could not be parsed.";
+            return false;
+        }
+    }
+
+
+    // =========================================================
+    // COMMAND TYPE
+    // =========================================================
+
+    private static bool IsTerrainType(string type)
+    {
+        return type == "terrain" ||
+               type == "modify_terrain" ||
+               type == "terrain_modify";
+    }
+
+    private static bool IsTreeType(string type)
+    {
+        return type == "trees" ||
+               type == "tree" ||
+               type == "plant_trees" ||
+               type == "remove_trees" ||
+               type == "move_tree" ||
+               type == "delete_tree";
+    }
+
+    private void PrepareCommandType(LandscapeCommand command)
+    {
+        if (command == null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(command.commandType))
+        {
+            command.commandType = command.commandType.Trim().ToLowerInvariant();
+            return;
+        }
+
+        // JsonUtility creates empty nested objects for missing fields,
+        // so check the action string rather than null.
+        if (command.terrain != null && !string.IsNullOrWhiteSpace(command.terrain.action))
+        {
+            command.commandType = "terrain";
+            return;
+        }
+
+        if (command.trees != null && !string.IsNullOrWhiteSpace(command.trees.action))
+        {
+            command.commandType = "trees";
+            return;
+        }
+
+        command.commandType = "unknown";
     }
 
 
@@ -1591,429 +1115,45 @@ public class DemoChat : MonoBehaviour
     // VALIDATE COMMAND
     // =========================================================
 
-    private bool ValidateCommand(
-        LandscapeCommand command,
-        SpatialContext spatialContext,
-        out string error
-    )
+    private bool ValidateCommand(LandscapeCommand command, out string error)
     {
         error = "";
 
         if (command == null)
         {
-            error =
-                "The AI returned no command.";
-
+            error = "The AI returned no command.";
             return false;
         }
 
-        if (
-            string.IsNullOrWhiteSpace(
-                command.commandType
-            )
-        )
+        PrepareCommandType(command);
+        string type = command.commandType;
+
+        if (IsTerrainType(type))
         {
-            error =
-                "The AI did not specify what system to use.";
-
-            return false;
-        }
-
-        string commandType =
-            command.commandType
-                .Trim()
-                .ToLowerInvariant();
-
-
-        // UNKNOWN
-
-        if (
-            commandType == "unknown" ||
-            commandType == "unclear" ||
-            commandType == "ambiguous"
-        )
-        {
-            if (!allowClarification)
+            if (command.terrain == null || string.IsNullOrWhiteSpace(command.terrain.action))
             {
-                error =
-                    "Clarification is currently disabled.";
-
+                error = "The AI identified a terrain action but did not specify which one.";
                 return false;
             }
 
+            command.terrain.action = command.terrain.action.Trim().ToLowerInvariant();
             return true;
         }
 
-
-        // ADVICE
-
-        if (commandType == "advice")
+        if (IsTreeType(type))
         {
-            if (!allowDesignAdvice)
+            if (command.trees == null || string.IsNullOrWhiteSpace(command.trees.action))
             {
-                error =
-                    "Design advice is currently disabled.";
-
+                error = "The AI identified a tree action but did not specify which one.";
                 return false;
             }
 
-            if (
-                string.IsNullOrWhiteSpace(
-                    command.assistantMessage
-                ) &&
-                string.IsNullOrWhiteSpace(
-                    command.reason
-                )
-            )
-            {
-                error =
-                    "The AI did not provide an explanation.";
-
-                return false;
-            }
-
-            // suggestedCommand is optional.
-            // Advice can exist without an executable action.
-
-            if (
-                command.suggestedCommand != null
-            )
-            {
-                string suggestedType =
-                    command.suggestedCommand.commandType;
-
-                if (
-                    string.IsNullOrWhiteSpace(
-                        suggestedType
-                    )
-                )
-                {
-                    error =
-                        "The AI provided an invalid recommendation.";
-
-                    return false;
-                }
-
-                suggestedType =
-                    suggestedType
-                        .Trim()
-                        .ToLowerInvariant();
-
-                if (
-                    suggestedType == "advice" ||
-                    suggestedType == "unknown" ||
-                    suggestedType == "unclear" ||
-                    suggestedType == "ambiguous"
-                )
-                {
-                    error =
-                        "The AI recommendation is not an executable Unity action.";
-
-                    return false;
-                }
-
-                string suggestedError;
-
-                if (
-                    !ValidateCommand(
-                        command.suggestedCommand,
-                        spatialContext,
-                        out suggestedError
-                    )
-                )
-                {
-                    error =
-                        "The AI recommendation could not be validated.\n\n" +
-                        suggestedError;
-
-                    return false;
-                }
-            }
-
+            command.trees.action = command.trees.action.Trim().ToLowerInvariant();
             return true;
         }
 
-
-        // TERRAIN
-
-        if (
-            commandType == "terrain" ||
-            commandType == "modify_terrain" ||
-            commandType == "terrain_modify"
-        )
-        {
-            if (command.terrain == null)
-            {
-                error =
-                    "The AI identified a terrain action " +
-                    "but did not provide terrain settings.";
-
-                return false;
-            }
-
-            if (
-                string.IsNullOrWhiteSpace(
-                    command.terrain.action
-                )
-            )
-            {
-                error =
-                    "The AI did not specify the terrain action.";
-
-                return false;
-            }
-
-            return true;
-        }
-
-
-        // TREES
-
-        if (
-            commandType == "trees" ||
-            commandType == "tree" ||
-            commandType == "plant_trees" ||
-            commandType == "remove_trees" ||
-            commandType == "move_tree"
-        )
-        {
-            if (command.trees == null)
-            {
-                error =
-                    "The AI identified a tree action " +
-                    "but did not provide tree settings.";
-
-                return false;
-            }
-
-            if (
-                string.IsNullOrWhiteSpace(
-                    command.trees.action
-                )
-            )
-            {
-                error =
-                    "The AI did not specify the tree action.";
-
-                return false;
-            }
-
-            return true;
-        }
-
-
-        // WATER
-
-        if (
-            commandType == "water" ||
-            commandType == "river" ||
-            commandType == "lake"
-        )
-        {
-            if (command.water == null)
-            {
-                error =
-                    "The AI identified a water action " +
-                    "but did not provide water settings.";
-
-                return false;
-            }
-
-            if (
-                string.IsNullOrWhiteSpace(
-                    command.water.action
-                )
-            )
-            {
-                error =
-                    "The AI did not specify the water action.";
-
-                return false;
-            }
-
-            return true;
-        }
-
-
-        // BUILDINGS
-
-        if (
-            commandType == "building" ||
-            commandType == "buildings" ||
-            commandType == "building_generation"
-        )
-        {
-            if (command.building == null)
-            {
-                error =
-                    "The AI identified a building action " +
-                    "but did not provide building settings.";
-
-                return false;
-            }
-
-            if (
-                string.IsNullOrWhiteSpace(
-                    command.building.action
-                )
-            )
-            {
-                error =
-                    "The AI did not specify the building action.";
-
-                return false;
-            }
-
-            return true;
-        }
-
-
-        error =
-            "I could not determine which system " +
-            "you want to control.";
-
+        error = "I can only change the terrain (mountains, rivers, lakes) and trees.";
         return false;
-    }
-
-
-    // =========================================================
-    // ADVICE
-    // =========================================================
-
-    private void HandleAdvice(
-        LandscapeCommand command
-    )
-    {
-        string message =
-            command.assistantMessage;
-
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            message =
-                command.reason;
-        }
-
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            message =
-                "I can help you think about the design, but I need more information about what you want to achieve.";
-        }
-
-
-        // -----------------------------------------------------
-        // REMEMBER ACTIONABLE RECOMMENDATION
-        // -----------------------------------------------------
-
-        if (
-            command.suggestedCommand != null
-        )
-        {
-            lastAdviceCommand =
-                CloneCommand(
-                    command.suggestedCommand
-                );
-
-            lastAdviceText =
-                message;
-
-            message +=
-                "\n\n" +
-                "If you want me to apply this recommendation, say \"do it\".";
-        }
-        else
-        {
-            lastAdviceCommand = null;
-            lastAdviceText = "";
-        }
-
-
-        SetOutput(
-            message
-        );
-    }
-
-
-    // =========================================================
-    // UNKNOWN
-    // =========================================================
-
-    private void HandleUnknownCommand(
-        LandscapeCommand command
-    )
-    {
-        string reason =
-            command.reason;
-
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            reason =
-                "The request is not specific enough.";
-        }
-
-        SetOutput(
-            "I am not confident enough to act on that request.\n\n" +
-            reason +
-            "\n\n" +
-            "Please tell me more specifically what you want."
-        );
-    }
-
-
-    // =========================================================
-    // LOW CONFIDENCE
-    // =========================================================
-
-    private void HandleLowConfidence(
-        LandscapeCommand command
-    )
-    {
-        string reason =
-            command.reason;
-
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            reason =
-                "I am not confident that I understood the request.";
-        }
-
-        SetOutput(
-            "I don't want to make the wrong change.\n\n" +
-            reason +
-            "\n\n" +
-            "Please clarify what you want."
-        );
-    }
-
-
-    // =========================================================
-    // MEDIUM CONFIDENCE
-    // =========================================================
-
-    private void HandleMediumConfidence(
-        LandscapeCommand command,
-        SpatialContext spatialContext
-    )
-    {
-        hasPendingConfirmation = true;
-
-        pendingCommand = command;
-
-        pendingSpatialContext =
-            spatialContext;
-
-        string actionDescription =
-            DescribeCommand(command);
-
-        SetOutput(
-            "I think you want to:\n\n" +
-            actionDescription +
-            "\n\n" +
-            "Confidence: " +
-            command.confidence.ToString("P0") +
-            "\n\n" +
-            "Should I do that?\n\n" +
-            "Say \"yes\" to confirm or \"no\" to cancel."
-        );
     }
 
 
@@ -2021,342 +1161,144 @@ public class DemoChat : MonoBehaviour
     // DESCRIBE COMMAND
     // =========================================================
 
-    private string DescribeCommand(
-        LandscapeCommand command
-    )
+    private string DescribeCommand(LandscapeCommand command, SpatialContext context)
     {
         if (command == null)
-        {
             return "perform the requested action";
+
+        PrepareCommandType(command);
+        string type = command.commandType;
+
+        // ---------------- TERRAIN ----------------
+
+        if (IsTerrainType(type))
+        {
+            if (command.terrain == null || string.IsNullOrWhiteSpace(command.terrain.action))
+                return "modify the terrain";
+
+            string action = command.terrain.action.Trim().ToLowerInvariant();
+            int count = Mathf.Max(command.terrain.count, 1);
+
+            switch (action)
+            {
+                case "mountain":
+                case "create_mountain":
+                    return command.terrain.usePointedPosition
+                        ? "create a mountain at the pointed location"
+                        : "create a mountain";
+
+                case "mountains":
+                case "create_mountains":
+                    return "create " + count + " mountain(s)";
+
+                case "river":
+                case "rivers":
+                case "create_river":
+                case "create_rivers":
+                    return "create " + count + " river(s)";
+
+                case "lake":
+                case "lakes":
+                case "create_lake":
+                case "create_lakes":
+                    return "create " + count + " lake(s)";
+
+                case "modify_river":
+                case "modify_selected_river":
+                case "river_modify":
+                    return "modify the selected river";
+
+                case "modify_lake":
+                case "modify_selected_lake":
+                case "lake_modify":
+                    return "modify the selected lake";
+
+                case "delete_mountain":
+                case "delete_selected_mountain":
+                case "remove_mountain":
+                    return context != null && context.hasSelectedMountain
+                        ? "delete " + context.selectedMountainName
+                        : "delete the selected mountain";
+
+                case "delete_river":
+                case "delete_selected_river":
+                case "remove_river":
+                    return "delete the selected river";
+
+                case "delete_lake":
+                case "delete_selected_lake":
+                case "remove_lake":
+                    return "delete the selected lake";
+
+                case "reset":
+                case "reset_terrain":
+                    return "restore the terrain to its original shape";
+
+                case "modify_mountain":
+                case "modify_selected_mountain":
+                case "mountain_modify":
+                    {
+                        string name = context != null && context.hasSelectedMountain
+                            ? context.selectedMountainName
+                            : "the selected mountain";
+
+                        if (command.terrain.heightChange > 0f)
+                            return "make " + name + " taller";
+
+                        if (command.terrain.heightChange < 0f)
+                            return "make " + name + " shorter";
+
+                        return "modify " + name;
+                    }
+            }
+
+            return "modify the terrain";
         }
 
-        string type =
-            command.commandType
-                .Trim()
-                .ToLowerInvariant();
+        // ---------------- TREES ----------------
 
-
-        // ADVICE
-
-        if (type == "advice")
+        if (IsTreeType(type))
         {
-            return
-                "provide design advice";
-        }
-
-
-        // TERRAIN
-
-        if (
-            type == "terrain" ||
-            type == "modify_terrain" ||
-            type == "terrain_modify"
-        )
-        {
-            if (command.terrain == null)
-            {
-                return "modify the existing terrain";
-            }
-
-            string action =
-                command.terrain.action
-                    .Trim()
-                    .ToLowerInvariant();
-
-            int count =
-                Mathf.Max(
-                    command.terrain.count,
-                    1
-                );
-
-
-            if (
-                action == "mountain" ||
-                action == "mountains" ||
-                action == "create_mountain" ||
-                action == "create_mountains"
-            )
-            {
-                return
-                    "create " +
-                    count +
-                    " mountain(s) on the existing terrain";
-            }
-
-
-            if (
-                action == "modify_mountain" ||
-                action == "modify_selected_mountain" ||
-                action == "mountain_modify"
-            )
-            {
-                if (
-                    command.terrain.heightChange >
-                    0.01f
-                )
-                {
-                    return
-                        "make the pointed mountain taller by approximately " +
-                        command.terrain.heightChange.ToString("F1") +
-                        " metres";
-                }
-
-                if (
-                    command.terrain.heightChange <
-                    -0.01f
-                )
-                {
-                    return
-                        "make the pointed mountain shorter by approximately " +
-                        Mathf.Abs(
-                            command.terrain.heightChange
-                        ).ToString("F1") +
-                        " metres";
-                }
-
-                return
-                    "modify the pointed mountain";
-            }
-
-
-            if (
-                action == "reset" ||
-                action == "reset_terrain"
-            )
-            {
-                return
-                    "restore the existing terrain to its original shape";
-            }
-
-
-            return
-                "modify the existing terrain";
-        }
-
-
-        // TREES
-
-        if (
-            type == "trees" ||
-            type == "tree" ||
-            type == "plant_trees" ||
-            type == "remove_trees" ||
-            type == "move_tree"
-        )
-        {
-            if (command.trees == null)
-            {
+            if (command.trees == null || string.IsNullOrWhiteSpace(command.trees.action))
                 return "perform a tree operation";
-            }
 
-            string action =
-                command.trees.action
-                    .Trim()
-                    .ToLowerInvariant();
+            string action = command.trees.action.Trim().ToLowerInvariant();
 
-
-            if (action == "move_tree")
+            switch (action)
             {
-                if (
-                    pendingSpatialContext != null &&
-                    pendingSpatialContext.hasSelectedTree
-                )
-                {
-                    return
-                        "move " +
-                        pendingSpatialContext.selectedTreeName +
-                        " to the pointed location";
-                }
+                case "move_tree":
+                    return context != null && context.hasSelectedTree
+                        ? "move " + context.selectedTreeName + " to the pointed location"
+                        : "move the selected tree";
 
-                return "move the selected tree";
+                case "plant":
+                case "plant_trees":
+                case "create_forest":
+                    {
+                        int count = Mathf.Max(command.trees.count, 1);
+                        string typeName = NormalizeName(command.trees.treeType);
+
+                        return "plant " + count + " " + typeName + " tree(s)" +
+                               (command.trees.usePointedPosition ? " at the pointed location" : "");
+                    }
+
+                case "delete_tree":
+                case "delete_selected_tree":
+                    return context != null && context.hasSelectedTree
+                        ? "delete " + context.selectedTreeName
+                        : "delete the selected tree";
+
+                case "remove":
+                case "remove_trees":
+                    return "remove trees around the pointed location";
+
+                case "remove_all_trees":
+                case "clear_trees":
+                    return "remove all trees";
             }
 
-
-            if (
-                action == "plant" ||
-                action == "plant_trees" ||
-                action == "create_forest"
-            )
-            {
-                return
-                    "plant " +
-                    Mathf.Max(
-                        command.trees.count,
-                        1
-                    ) +
-                    " " +
-                    NormalizeName(
-                        command.trees.treeType
-                    ) +
-                    " tree(s)";
-            }
-
-
-            if (
-                action == "remove" ||
-                action == "remove_trees"
-            )
-            {
-                return
-                    "remove trees from the selected area";
-            }
-
-
-            if (
-                action == "remove_all_trees" ||
-                action == "clear_trees"
-            )
-            {
-                return
-                    "remove all trees";
-            }
-
-
-            return
-                "perform tree action: " +
-                action;
+            return "perform tree action: " + action;
         }
-
-
-        // WATER
-
-        if (
-            type == "water" ||
-            type == "river" ||
-            type == "lake"
-        )
-        {
-            if (command.water == null)
-            {
-                return "perform a water operation";
-            }
-
-            string action =
-                command.water.action
-                    .Trim()
-                    .ToLowerInvariant();
-
-
-            if (
-                action == "create_river" ||
-                action == "river"
-            )
-            {
-                return
-                    "create a river at a random safe nearby location";
-            }
-
-
-            if (
-                action == "create_lake" ||
-                action == "lake"
-            )
-            {
-                return
-                    "create a lake at a random safe nearby location";
-            }
-
-
-            if (
-                action == "delete" ||
-                action == "delete_water" ||
-                action == "remove_water" ||
-                action == "clear_water"
-            )
-            {
-                return
-                    "remove the generated water and restore the terrain";
-            }
-
-
-            return
-                "perform water action: " +
-                action;
-        }
-
-
-        // BUILDINGS
-
-        if (
-            type == "building" ||
-            type == "buildings" ||
-            type == "building_generation"
-        )
-        {
-            if (command.building == null)
-            {
-                return "perform a building operation";
-            }
-
-            string action =
-                command.building.action
-                    .Trim()
-                    .ToLowerInvariant();
-
-            int count =
-                Mathf.Max(
-                    command.building.count,
-                    1
-                );
-
-
-            if (
-                action == "create_house" ||
-                action == "create_houses" ||
-                action == "house" ||
-                action == "houses"
-            )
-            {
-                return
-                    "create " +
-                    count +
-                    " house(s) on the existing terrain";
-            }
-
-
-            if (
-                action == "create_temple" ||
-                action == "create_temples" ||
-                action == "temple" ||
-                action == "temples"
-            )
-            {
-                return
-                    "create " +
-                    count +
-                    " temple(s) on the existing terrain";
-            }
-
-
-            if (
-                action == "create_random" ||
-                action == "create_random_building" ||
-                action == "random_building"
-            )
-            {
-                return
-                    "create " +
-                    count +
-                    " random building(s)";
-            }
-
-
-            if (
-                action == "clear" ||
-                action == "clear_buildings" ||
-                action == "remove_all_buildings"
-            )
-            {
-                return
-                    "remove all generated buildings";
-            }
-
-
-            return
-                "perform building action: " +
-                action;
-        }
-
 
         return "perform the requested action";
     }
@@ -2366,83 +1308,20 @@ public class DemoChat : MonoBehaviour
     // EXECUTE COMMAND
     // =========================================================
 
-    private bool ExecuteValidatedCommand(
-        LandscapeCommand command,
-        SpatialContext spatialContext
-    )
+    private bool ExecuteValidatedCommand(LandscapeCommand command, SpatialContext spatialContext)
     {
         if (command == null)
-        {
             return false;
-        }
 
-        string commandType =
-            command.commandType
-                .Trim()
-                .ToLowerInvariant();
+        PrepareCommandType(command);
 
+        if (IsTerrainType(command.commandType))
+            return ProcessTerrainCommand(command, spatialContext);
 
-        if (commandType == "advice")
-        {
-            HandleAdvice(command);
-            return true;
-        }
+        if (IsTreeType(command.commandType))
+            return ProcessTreeCommand(command, spatialContext);
 
-
-        if (
-            commandType == "terrain" ||
-            commandType == "modify_terrain" ||
-            commandType == "terrain_modify"
-        )
-        {
-            return ProcessTerrainCommand(
-                command,
-                spatialContext
-            );
-        }
-
-
-        if (
-            commandType == "trees" ||
-            commandType == "tree" ||
-            commandType == "plant_trees" ||
-            commandType == "remove_trees" ||
-            commandType == "move_tree"
-        )
-        {
-            return ProcessTreeCommand(
-                command,
-                spatialContext
-            );
-        }
-
-
-        if (
-            commandType == "building" ||
-            commandType == "buildings" ||
-            commandType == "building_generation"
-        )
-        {
-            return ProcessBuildingCommand(command);
-        }
-
-
-        // WATER
-
-        if (
-            commandType == "water" ||
-            commandType == "river" ||
-            commandType == "lake"
-        )
-        {
-            return ProcessWaterCommand(command);
-        }
-
-
-        SetOutput(
-            "I could not determine the requested action."
-        );
-
+        SetOutput("I could not determine the requested action.");
         return false;
     }
 
@@ -2451,162 +1330,319 @@ public class DemoChat : MonoBehaviour
     // TERRAIN
     // =========================================================
 
-    private bool ProcessTerrainCommand(
-        LandscapeCommand command,
-        SpatialContext spatialContext
-    )
+    private bool ProcessTerrainCommand(LandscapeCommand command, SpatialContext spatialContext)
     {
         if (terrainGenerator == null)
         {
-            SetOutput(
-                "TerrainGenerator is not assigned."
-            );
-
+            SetOutput("TerrainGenerator is not assigned.");
             return false;
         }
 
         if (command.terrain == null)
-        {
             return false;
-        }
 
-        string action =
-            command.terrain.action
-                .Trim()
-                .ToLowerInvariant();
+        string action = command.terrain.action.Trim().ToLowerInvariant();
+        int count = Mathf.Clamp(command.terrain.count <= 0 ? 1 : command.terrain.count, 1, 20);
 
-
-        // -----------------------------------------------------
-        // CREATE MOUNTAINS
-        // -----------------------------------------------------
-
-        int count =
-            Mathf.Clamp(
-                command.terrain.count <= 0
-                    ? 1
-                    : command.terrain.count,
-                1,
-                20
-            );
-
-
-        if (
-            action == "mountain" ||
-            action == "mountains" ||
-            action == "create_mountain" ||
-            action == "create_mountains"
-        )
+        switch (action)
         {
-            terrainGenerator.CreateRandomMountains(
-                count
-            );
+            // ---------------- MOUNTAIN ----------------
 
-            SetOutput(
-                "Created " +
-                count +
-                " mountain(s) on the existing terrain."
-            );
+            case "mountain":
+            case "create_mountain":
+                if (command.terrain.usePointedPosition)
+                {
+                    if (!spatialContext.hasGroundPosition)
+                    {
+                        SetOutput("Please point at the terrain where you want the mountain created.");
+                        return false;
+                    }
 
-            return true;
+                    terrainGenerator.CreateMountainAtWorldPosition(spatialContext.groundPosition);
+                    return true;
+                }
+
+                terrainGenerator.CreateRandomMountain();
+                return true;
+
+            case "mountains":
+            case "create_mountains":
+                terrainGenerator.CreateRandomMountains(count);
+                return true;
+
+            // ---------------- RIVER / LAKE CREATION ----------------
+
+            case "river":
+            case "rivers":
+            case "create_river":
+            case "create_rivers":
+                if (!RequireWaterManager())
+                    return false;
+
+                for (int i = 0; i < count; i++)
+                    waterManager.CreateRiver();
+
+                return true;
+
+            case "lake":
+            case "lakes":
+            case "create_lake":
+            case "create_lakes":
+                if (!RequireWaterManager())
+                    return false;
+
+                for (int i = 0; i < count; i++)
+                    waterManager.CreateLake();
+
+                return true;
+
+            // ---------------- MODIFY RIVER ----------------
+
+            case "modify_river":
+            case "modify_selected_river":
+            case "river_modify":
+                {
+                    if (!RequireWaterManager())
+                        return false;
+
+                    if (!spatialContext.hasSelectedRiver)
+                    {
+                        SetOutput("Please point at a river first.");
+                        return false;
+                    }
+
+                    int riverId = spatialContext.selectedRiverId;
+                    WaterManager.RiverInfo river = waterManager.GetRiverById(riverId);
+
+                    if (river == null)
+                    {
+                        SetOutput("The selected river no longer exists. Please point at a river again.");
+                        return false;
+                    }
+
+                    float widthChange = command.terrain.widthChange;
+                    float depthChange = command.terrain.depthChange;
+
+                    if (Mathf.Abs(widthChange) < 0.01f && Mathf.Abs(depthChange) < 0.01f)
+                    {
+                        SetOutput("Please say whether you want the river wider, narrower, deeper or shallower.");
+                        return false;
+                    }
+
+                    bool success = waterManager.ModifyRiver(
+                        riverId,
+                        Mathf.Clamp(river.width + widthChange, 2f, 100f),
+                        Mathf.Clamp(river.depth + depthChange, 0f, 20f)
+                    );
+
+                    if (!success)
+                    {
+                        SetOutput("I could not modify the selected river.");
+                        return false;
+                    }
+
+                    return true;
+                }
+
+            // ---------------- MODIFY LAKE ----------------
+
+            case "modify_lake":
+            case "modify_selected_lake":
+            case "lake_modify":
+                {
+                    if (!RequireWaterManager())
+                        return false;
+
+                    if (!spatialContext.hasSelectedLake)
+                    {
+                        SetOutput("Please point at a lake first.");
+                        return false;
+                    }
+
+                    int lakeId = spatialContext.selectedLakeId;
+                    WaterManager.LakeInfo lake = waterManager.GetLakeById(lakeId);
+
+                    if (lake == null)
+                    {
+                        SetOutput("The selected lake no longer exists. Please point at a lake again.");
+                        return false;
+                    }
+
+                    float widthChange = command.terrain.widthChange;
+                    float lengthChange = command.terrain.lengthChange;
+                    float depthChange = command.terrain.depthChange;
+
+                    if (Mathf.Abs(widthChange) < 0.01f &&
+                        Mathf.Abs(lengthChange) < 0.01f &&
+                        Mathf.Abs(depthChange) < 0.01f)
+                    {
+                        SetOutput("Please say whether you want the lake wider, narrower, longer, shorter, deeper or shallower.");
+                        return false;
+                    }
+
+                    bool success = waterManager.ModifyLake(
+                        lakeId,
+                        Mathf.Clamp(lake.width + widthChange, 5f, 150f),
+                        Mathf.Clamp(lake.length + lengthChange, 5f, 150f),
+                        Mathf.Clamp(lake.depth + depthChange, 0f, 20f)
+                    );
+
+                    if (!success)
+                    {
+                        SetOutput("I could not modify the selected lake.");
+                        return false;
+                    }
+
+                    return true;
+                }
+
+            // ---------------- MODIFY MOUNTAIN ----------------
+
+            case "modify_mountain":
+            case "modify_selected_mountain":
+            case "mountain_modify":
+                {
+                    if (!spatialContext.hasSelectedMountain)
+                    {
+                        SetOutput("Please point at a mountain first.");
+                        return false;
+                    }
+
+                    int mountainId = spatialContext.selectedMountainIndex;
+
+                    if (!terrainGenerator.HasMountain(mountainId))
+                    {
+                        SetOutput("The selected mountain no longer exists. Please point at a mountain again.");
+                        return false;
+                    }
+
+                    float heightChange = command.terrain.heightChange;
+
+                    if (Mathf.Abs(heightChange) < 0.01f)
+                    {
+                        SetOutput("Please say whether you want the selected mountain taller or shorter.");
+                        return false;
+                    }
+
+                    if (!terrainGenerator.ModifyMountain(mountainId, Mathf.Clamp(heightChange, -20f, 20f)))
+                    {
+                        SetOutput("I could not modify the selected mountain.");
+                        return false;
+                    }
+
+                    return true;
+                }
+
+            // ---------------- DELETE MOUNTAIN ----------------
+
+            case "delete_mountain":
+            case "delete_selected_mountain":
+            case "remove_mountain":
+                {
+                    if (!spatialContext.hasSelectedMountain)
+                    {
+                        SetOutput("Please point at a mountain first.");
+                        return false;
+                    }
+
+                    int mountainId = spatialContext.selectedMountainIndex;
+
+                    if (!terrainGenerator.HasMountain(mountainId))
+                    {
+                        SetOutput("The selected mountain no longer exists. Please point at a mountain again.");
+                        return false;
+                    }
+
+                    terrainGenerator.DeleteMountain(mountainId);
+
+                    if (terrainGenerator.HasMountain(mountainId))
+                    {
+                        SetOutput("I could not delete the selected mountain.");
+                        return false;
+                    }
+
+                    if (mountainPointingDetector != null)
+                        mountainPointingDetector.ClearSelection();
+
+                    return true;
+                }
+
+            // ---------------- DELETE RIVER ----------------
+
+            case "delete_river":
+            case "delete_selected_river":
+            case "remove_river":
+                {
+                    if (!RequireWaterManager())
+                        return false;
+
+                    if (!spatialContext.hasSelectedRiver)
+                    {
+                        SetOutput("Please point at a river first.");
+                        return false;
+                    }
+
+                    int riverId = spatialContext.selectedRiverId;
+                    waterManager.DeleteRiver(riverId);
+
+                    if (waterManager.GetRiverById(riverId) != null)
+                    {
+                        SetOutput("I could not delete the selected river.");
+                        return false;
+                    }
+
+                    return true;
+                }
+
+            // ---------------- DELETE LAKE ----------------
+
+            case "delete_lake":
+            case "delete_selected_lake":
+            case "remove_lake":
+                {
+                    if (!RequireWaterManager())
+                        return false;
+
+                    if (!spatialContext.hasSelectedLake)
+                    {
+                        SetOutput("Please point at a lake first.");
+                        return false;
+                    }
+
+                    int lakeId = spatialContext.selectedLakeId;
+                    waterManager.DeleteLake(lakeId);
+
+                    if (waterManager.GetLakeById(lakeId) != null)
+                    {
+                        SetOutput("I could not delete the selected lake.");
+                        return false;
+                    }
+
+                    return true;
+                }
+
+            // ---------------- RESET ----------------
+
+            case "reset":
+            case "reset_terrain":
+                terrainGenerator.ResetTerrain();
+
+                if (waterManager != null)
+                    waterManager.DeleteWater();
+
+                return true;
         }
-        if(
-            action == "mountain_range" 
-           
-        )
-        {
-            terrainGenerator.CreateRandomMountainRange();
 
-            SetOutput(
-                "Created a range of mountain on the existing terrain."
-            );
+        SetOutput("Unknown terrain action: " + action);
+        return false;
+    }
 
+    private bool RequireWaterManager()
+    {
+        if (waterManager != null)
             return true;
-        }
 
-        // -----------------------------------------------------
-        // RESET
-        // -----------------------------------------------------
-
-        if (
-            action == "reset" ||
-            action == "reset_terrain"
-        )
-        {
-            terrainGenerator.ResetTerrain();
-
-            SetOutput(
-                "The existing terrain has been restored."
-            );
-
-            return true;
-        }
-
-
-        // -----------------------------------------------------
-        // MOUNTAIN MODIFICATION — POSITION ONLY
-        // -----------------------------------------------------
-
-        if (
-            action == "modify_mountain" ||
-            action == "modify_selected_mountain" ||
-            action == "mountain_modify"
-        )
-        {
-            if (!spatialContext.hasGroundPosition)
-            {
-                SetOutput(
-                    "Please point at the mountain first."
-                );
-
-                return false;
-            }
-
-            float heightChange =
-                command.terrain.heightChange;
-
-            if (Mathf.Abs(heightChange) < 0.01f)
-            {
-                SetOutput(
-                    "Please say whether you want the pointed mountain taller or shorter."
-                );
-
-                return false;
-            }
-
-            bool success =
-                terrainGenerator.ModifyMountainAtWorldPosition(
-                    spatialContext.groundPosition,
-                    Mathf.Clamp(
-                        heightChange,
-                        -20f,
-                        20f
-                    )
-                );
-
-            if (!success)
-            {
-                SetOutput(
-                    "I could not modify the mountain at the pointed position."
-                );
-
-                return false;
-            }
-
-            SetOutput(
-                heightChange > 0f
-                    ? "The pointed mountain was made taller."
-                    : "The pointed mountain was made shorter."
-            );
-
-            return true;
-        }
-
-
-        SetOutput(
-            "Unknown terrain action: " +
-            action
-        );
-
+        SetOutput("WaterManager is not assigned.");
         return false;
     }
 
@@ -2615,186 +1651,167 @@ public class DemoChat : MonoBehaviour
     // TREES
     // =========================================================
 
-    private bool ProcessTreeCommand(
-        LandscapeCommand command,
-        SpatialContext spatialContext
-    )
+    private bool ProcessTreeCommand(LandscapeCommand command, SpatialContext spatialContext)
     {
         if (treeManager == null)
         {
-            SetOutput(
-                "TreeManager is not assigned."
-            );
-
+            SetOutput("TreeManager is not assigned.");
             return false;
         }
 
         if (command.trees == null)
+            return false;
+
+        TreeCommand tree = command.trees;
+        string action = tree.action.Trim().ToLowerInvariant();
+
+        switch (action)
         {
+            // ---------------- MOVE ----------------
+
+            case "move_tree":
+                return ProcessMoveTreeCommand(spatialContext);
+
+            // ---------------- PLANT ----------------
+
+            case "plant":
+            case "plant_trees":
+            case "create_forest":
+                {
+                    int count = Mathf.Clamp(tree.count <= 0 ? 1 : tree.count, 1, 5000);
+                    float radius = Mathf.Max(tree.radius, 1f);
+                    float spacing = Mathf.Max(tree.spacing, 0.5f);
+                    string requestedType = NormalizeName(tree.treeType);
+
+                    // Default centre comes from the command (0,0 unless set);
+                    // the AI is told not to provide coordinates, so TreeManager
+                    // is expected to treat this as "anywhere on the terrain".
+                    float centerX = tree.centerX;
+                    float centerZ = tree.centerZ;
+
+                    if (tree.usePointedPosition)
+                    {
+                        Vector2 terrainPosition;
+
+                        if (!TryGetPointedTerrainPosition(
+                                spatialContext,
+                                "Please point at the terrain where you want the trees planted.",
+                                out terrainPosition))
+                        {
+                            return false;
+                        }
+
+                        centerX = terrainPosition.x;
+                        centerZ = terrainPosition.y;
+
+                        Debug.Log("[DemoChat] Pointed tree creation position: " + centerX + ", " + centerZ);
+                    }
+
+                    if (requestedType.Equals("Mixed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        treeManager.PlantMixedTrees(count, centerX, centerZ, radius, spacing);
+                        return true;
+                    }
+
+                    if (treeManager.GetTreePrefab(requestedType) == null)
+                    {
+                        SetOutput("Tree type '" + requestedType + "' was not found in TreeManager.");
+                        return false;
+                    }
+
+                    treeManager.PlantTrees(count, requestedType, centerX, centerZ, radius, spacing);
+                    return true;
+                }
+
+            // ---------------- DELETE SELECTED ----------------
+
+            case "delete_tree":
+            case "delete_selected_tree":
+                {
+                    if (!spatialContext.hasSelectedTree)
+                    {
+                        SetOutput("Please point at a tree first.");
+                        return false;
+                    }
+
+                    TreeSelectable selectedTree =
+                        treePointingDetector != null ? treePointingDetector.GetSelectedTree() : null;
+
+                    if (selectedTree == null)
+                    {
+                        SetOutput("The selected tree is no longer available. Please point at a tree again.");
+                        return false;
+                    }
+
+                    if (terrainGenerator == null)
+                    {
+                        SetOutput("TerrainGenerator is not assigned.");
+                        return false;
+                    }
+
+                    // RemoveTrees uses the same terrain coordinates as PlantTrees.
+                    Vector2 terrainPosition =
+                        terrainGenerator.WorldToTerrainPosition(selectedTree.transform.position);
+
+                    treeManager.RemoveTrees(terrainPosition.x, terrainPosition.y, selectedTreeRemovalRadius);
+                    return true;
+                }
+
+            // ---------------- REMOVE AREA ----------------
+
+            case "remove":
+            case "remove_trees":
+                {
+                    Vector2 terrainPosition;
+
+                    if (!TryGetPointedTerrainPosition(
+                            spatialContext,
+                            "Please point at the area where you want the trees removed.",
+                            out terrainPosition))
+                    {
+                        return false;
+                    }
+
+                    float radius = tree.radius > 0f ? tree.radius : defaultTreeRemovalRadius;
+
+                    treeManager.RemoveTrees(terrainPosition.x, terrainPosition.y, Mathf.Max(radius, 1f));
+                    return true;
+                }
+
+            // ---------------- REMOVE ALL ----------------
+
+            case "remove_all_trees":
+            case "clear_trees":
+                treeManager.RemoveAllTrees();
+                return true;
+        }
+
+        SetOutput("Unknown tree action: " + action);
+        return false;
+    }
+
+    private bool TryGetPointedTerrainPosition(
+        SpatialContext spatialContext,
+        string missingMessage,
+        out Vector2 terrainPosition
+    )
+    {
+        terrainPosition = Vector2.zero;
+
+        if (!spatialContext.hasGroundPosition)
+        {
+            SetOutput(missingMessage);
             return false;
         }
 
-        TreeCommand tree =
-            command.trees;
-
-        string action =
-            tree.action
-                .Trim()
-                .ToLowerInvariant();
-
-
-        // MOVE TREE
-
-        if (action == "move_tree")
+        if (terrainGenerator == null)
         {
-            return ProcessMoveTreeCommand(
-                spatialContext
-            );
+            SetOutput("TerrainGenerator is not assigned.");
+            return false;
         }
 
-
-        // PLANT
-
-        if (
-            action == "plant_trees" ||
-            action == "plant" ||
-            action == "create_forest"
-        )
-        {
-            int count =
-                Mathf.Clamp(
-                    tree.count,
-                    1,
-                    5000
-                );
-
-            float radius =
-                Mathf.Max(
-                    tree.radius,
-                    1f
-                );
-
-            float spacing =
-                Mathf.Max(
-                    tree.spacing,
-                    0.5f
-                );
-
-            string requestedType =
-                NormalizeName(
-                    tree.treeType
-                );
-
-
-            if (
-                requestedType.Equals(
-                    "mixed",
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                treeManager.PlantMixedTrees(
-                    count,
-                    tree.centerX,
-                    tree.centerZ,
-                    radius,
-                    spacing
-                );
-
-                SetOutput(
-                    "Mixed forest planted.\n\n" +
-                    "Count: " +
-                    count
-                );
-
-                return true;
-            }
-
-
-            GameObject prefab =
-                treeManager.GetTreePrefab(
-                    requestedType
-                );
-
-            if (prefab == null)
-            {
-                SetOutput(
-                    "Tree type '" +
-                    requestedType +
-                    "' was not found in TreeManager."
-                );
-
-                return false;
-            }
-
-
-            treeManager.PlantTrees(
-                count,
-                requestedType,
-                tree.centerX,
-                tree.centerZ,
-                radius,
-                spacing
-            );
-
-            SetOutput(
-                requestedType +
-                " trees planted.\n\n" +
-                "Count: " +
-                count
-            );
-
-            return true;
-        }
-
-
-        // REMOVE
-
-        if (
-            action == "remove_trees" ||
-            action == "remove"
-        )
-        {
-            treeManager.RemoveTrees(
-                tree.centerX,
-                tree.centerZ,
-                Mathf.Max(
-                    tree.radius,
-                    1f
-                )
-            );
-
-            SetOutput(
-                "Trees removed."
-            );
-
-            return true;
-        }
-
-
-        // REMOVE ALL
-
-        if (
-            action == "remove_all_trees" ||
-            action == "clear_trees"
-        )
-        {
-            treeManager.RemoveAllTrees();
-
-            SetOutput(
-                "All trees removed."
-            );
-
-            return true;
-        }
-
-
-        SetOutput(
-            "Unknown tree action: " +
-            action
-        );
-
-        return false;
+        terrainPosition = terrainGenerator.WorldToTerrainPosition(spatialContext.groundPosition);
+        return true;
     }
 
 
@@ -2802,404 +1819,29 @@ public class DemoChat : MonoBehaviour
     // MOVE TREE
     // =========================================================
 
-    private bool ProcessMoveTreeCommand(
-        SpatialContext spatialContext
-    )
+    private bool ProcessMoveTreeCommand(SpatialContext spatialContext)
     {
         if (!spatialContext.hasSelectedTree)
         {
-            SetOutput(
-                "Please point at a tree first."
-            );
-
+            SetOutput("Please point at a tree first.");
             return false;
         }
 
         if (!spatialContext.hasGroundPosition)
         {
-            SetOutput(
-                "Please point at the ground where " +
-                "you want to move the tree."
-            );
-
+            SetOutput("Please point at the ground where you want to move the tree.");
             return false;
         }
 
-        bool success =
-            treeManager.MoveTreeToWorldPosition(
+        if (!treeManager.MoveTreeToWorldPosition(
                 spatialContext.selectedTreeIndex,
-                spatialContext.groundPosition
-            );
-
-        if (!success)
+                spatialContext.groundPosition))
         {
-            SetOutput(
-                "I could not move the selected tree."
-            );
-
+            SetOutput("I could not move the selected tree.");
             return false;
         }
-
-        SetOutput(
-            "Moved " +
-            spatialContext.selectedTreeName +
-            " to the pointed location."
-        );
 
         return true;
-    }
-
-
-    // =========================================================
-    // BUILDINGS
-    // =========================================================
-
-    private bool ProcessBuildingCommand(
-        LandscapeCommand command
-    )
-    {
-        if (buildingGenerator == null)
-        {
-            SetOutput(
-                "BuildingGenerator is not assigned."
-            );
-
-            return false;
-        }
-
-        if (command.building == null)
-        {
-            return false;
-        }
-
-        BuildingCommand building =
-            command.building;
-
-        string action =
-            building.action
-                .Trim()
-                .ToLowerInvariant();
-
-        int count =
-            Mathf.Clamp(
-                building.count <= 0
-                    ? 1
-                    : building.count,
-                1,
-                100
-            );
-
-
-        // HOUSE
-
-        if (
-            action == "house" ||
-            action == "houses" ||
-            action == "create_house" ||
-            action == "create_houses"
-        )
-        {
-            int created = 0;
-
-            for (
-                int i = 0;
-                i < count;
-                i++
-            )
-            {
-                int before =
-                    buildingGenerator.GetBuildingCount();
-
-                buildingGenerator.CreateRandomHouse();
-
-                int after =
-                    buildingGenerator.GetBuildingCount();
-
-                if (after > before)
-                {
-                    created++;
-                }
-            }
-
-            if (created == 0)
-            {
-                SetOutput(
-                    "I could not create any houses."
-                );
-
-                return false;
-            }
-
-            SetOutput(
-                "Created " +
-                created +
-                " house(s)."
-            );
-
-            return true;
-        }
-
-
-        // TEMPLE
-
-        if (
-            action == "temple" ||
-            action == "temples" ||
-            action == "create_temple" ||
-            action == "create_temples"
-        )
-        {
-            int created = 0;
-
-            for (
-                int i = 0;
-                i < count;
-                i++
-            )
-            {
-                int before =
-                    buildingGenerator.GetBuildingCount();
-
-                buildingGenerator.CreateRandomTemple();
-
-                int after =
-                    buildingGenerator.GetBuildingCount();
-
-                if (after > before)
-                {
-                    created++;
-                }
-            }
-
-            if (created == 0)
-            {
-                SetOutput(
-                    "I could not create any temples."
-                );
-
-                return false;
-            }
-
-            SetOutput(
-                "Created " +
-                created +
-                " temple(s)."
-            );
-
-            return true;
-        }
-
-
-        // RANDOM BUILDING
-
-        if (
-            action == "random" ||
-            action == "create_random" ||
-            action == "create_random_building" ||
-            action == "random_building"
-        )
-        {
-            int created = 0;
-
-            for (
-                int i = 0;
-                i < count;
-                i++
-            )
-            {
-                int before =
-                    buildingGenerator.GetBuildingCount();
-
-                buildingGenerator.CreateRandomBuilding();
-
-                int after =
-                    buildingGenerator.GetBuildingCount();
-
-                if (after > before)
-                {
-                    created++;
-                }
-            }
-
-            if (created == 0)
-            {
-                SetOutput(
-                    "I could not create any random buildings."
-                );
-
-                return false;
-            }
-
-            SetOutput(
-                "Created " +
-                created +
-                " random building(s)."
-            );
-
-            return true;
-        }
-
-
-        // MULTIPLE RANDOM BUILDINGS
-
-        if (
-            action == "create_random_buildings" ||
-            action == "random_buildings"
-        )
-        {
-            int before =
-                buildingGenerator.GetBuildingCount();
-
-            buildingGenerator.CreateRandomBuildings(
-                count
-            );
-
-            int after =
-                buildingGenerator.GetBuildingCount();
-
-            int created =
-                Mathf.Max(
-                    after - before,
-                    0
-                );
-
-            if (created == 0)
-            {
-                SetOutput(
-                    "No buildings were created."
-                );
-
-                return false;
-            }
-
-            SetOutput(
-                "Created " +
-                created +
-                " random building(s)."
-            );
-
-            return true;
-        }
-
-
-        // CLEAR
-
-        if (
-            action == "clear" ||
-            action == "clear_buildings" ||
-            action == "remove_all_buildings" ||
-            action == "remove_buildings"
-        )
-        {
-            int previousCount =
-                buildingGenerator.GetBuildingCount();
-
-            buildingGenerator.ClearBuildings();
-
-            SetOutput(
-                "Removed " +
-                previousCount +
-                " generated building(s)."
-            );
-
-            return true;
-        }
-
-
-        SetOutput(
-            "Unknown building action: " +
-            action
-        );
-
-        return false;
-    }
-
-
-    // =========================================================
-    // WATER
-    // =========================================================
-
-    private bool ProcessWaterCommand(
-        LandscapeCommand command
-    )
-    {
-        if (waterManager == null)
-        {
-            SetOutput(
-                "WaterManager is not assigned."
-            );
-
-            return false;
-        }
-
-        if (command.water == null)
-        {
-            SetOutput(
-                "No water command was provided."
-            );
-
-            return false;
-        }
-
-        string action =
-            command.water.action
-                .Trim()
-                .ToLowerInvariant();
-
-
-        if (
-            action == "create_river" ||
-            action == "river"
-        )
-        {
-            waterManager.CreateRiver();
-
-            SetOutput(
-                "Created a river at a random safe nearby location."
-            );
-
-            return true;
-        }
-
-
-        if (
-            action == "create_lake" ||
-            action == "lake"
-        )
-        {
-            waterManager.CreateLake();
-
-            SetOutput(
-                "Created a lake at a random safe nearby location."
-            );
-
-            return true;
-        }
-
-
-        if (
-            action == "delete" ||
-            action == "delete_water" ||
-            action == "remove_water" ||
-            action == "clear_water"
-        )
-        {
-            waterManager.DeleteWater();
-
-            SetOutput(
-                "Removed the generated water and restored the terrain."
-            );
-
-            return true;
-        }
-
-
-        SetOutput(
-            "Unknown water action: " +
-            action
-        );
-
-        return false;
     }
 
 
@@ -3207,119 +1849,21 @@ public class DemoChat : MonoBehaviour
     // NORMALIZE NAME
     // =========================================================
 
-    private string NormalizeName(
-        string value
-    )
+    private string NormalizeName(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
-        {
             return "Default";
-        }
 
-        string result =
-            value.Trim();
-
-        result =
-            Regex.Replace(
-                result,
-                @"\bcrops?\b",
-                "",
-                RegexOptions.IgnoreCase
-            );
-
-        result =
-            Regex.Replace(
-                result,
-                @"\bplants?\b",
-                "",
-                RegexOptions.IgnoreCase
-            );
-
-        result =
-            result.Trim();
+        string result = value.Trim();
+        result = Regex.Replace(result, @"\btrees?\b", "", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bcrops?\b", "", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"\bplants?\b", "", RegexOptions.IgnoreCase);
+        result = result.Trim();
 
         if (string.IsNullOrWhiteSpace(result))
-        {
             return "Default";
-        }
 
-        return
-            char.ToUpper(result[0]) +
-            result.Substring(1);
-    }
-
-
-    // =========================================================
-    // COMMAND TYPE DETECTION
-    // =========================================================
-
-    private string DetectCommandType(
-        string json
-    )
-    {
-        if (string.IsNullOrEmpty(json))
-        {
-            return "";
-        }
-
-        string lower =
-            json.ToLowerInvariant();
-
-        if (
-            lower.Contains(
-                "\"unknown\""
-            )
-        )
-        {
-            return "unknown";
-        }
-
-        if (
-            lower.Contains(
-                "\"advice\""
-            )
-        )
-        {
-            return "advice";
-        }
-
-        if (
-            lower.Contains(
-                "\"water\""
-            )
-        )
-        {
-            return "water";
-        }
-
-        if (
-            lower.Contains(
-                "\"building\""
-            )
-        )
-        {
-            return "building";
-        }
-
-        if (
-            lower.Contains(
-                "\"trees\""
-            )
-        )
-        {
-            return "trees";
-        }
-
-        if (
-            lower.Contains(
-                "\"terrain\""
-            )
-        )
-        {
-            return "terrain";
-        }
-
-        return "";
+        return char.ToUpper(result[0]) + result.Substring(1);
     }
 
 
@@ -3330,436 +1874,151 @@ public class DemoChat : MonoBehaviour
     private string BuildSystemPrompt()
     {
         return
-            "You are an interactive 3D environment design assistant inside a Unity application.\n\n" +
+            "You are a Unity landscape assistant.\n\n" +
 
-            "Your role is NOT simply to match keywords to commands.\n" +
-            "Your job is to understand what the user is trying to accomplish, interpret natural language using the Unity spatial context and conversation context, determine whether Unity can perform the requested action, and then either provide a supported Unity command, provide useful design advice, or clearly explain why the request cannot be performed.\n\n" +
+            "You control TWO systems:\n" +
+            "1. Terrain: mountains, rivers and lakes on the EXISTING terrain\n" +
+            "2. Trees\n\n" +
 
-            "IMPORTANT ARCHITECTURE:\n" +
-            "You decide WHAT the user wants.\n" +
-            "You may provide DESIGN ADVICE.\n" +
-            "Unity decides HOW the physical environment is changed.\n" +
-            "Do NOT calculate terrain geometry yourself.\n" +
-            "Do NOT invent coordinates.\n" +
-            "Do NOT invent object IDs.\n" +
-            "Do NOT pretend that an action has already happened.\n\n" +
+            "You cannot create buildings, roads, animals or anything else. " +
+            "For those requests, return unknown with a reason explaining what you can do.\n\n" +
 
+            "Return ONLY valid JSON: either ONE command, or a wrapper with a commands array.\n\n" +
 
-           
+            // ---------------- MULTI ----------------
 
-            "CONVERSATION:\n" +
-            "You are allowed to use recent conversation context to understand follow-up requests.\n" +
-            "The current Unity spatial context is authoritative.\n" +
-            "Never allow an old conversation coordinate or old object reference to override current Unity spatial context.\n" +
-            "The user may refer to previous advice using phrases such as:\n" +
-            "\"do it\"\n" +
-            "\"do that\"\n" +
-            "\"apply that\"\n" +
-            "\"go ahead\"\n" +
-            "\"do it too\"\n" +
-            "Use the previous advice when the reference is clear.\n\n" +
-
-
-            
-
-            "You control FOUR Unity environment systems:\n" +
-            "1. Existing Terrain and Mountains\n" +
-            "2. Trees\n" +
-            "3. Buildings\n" +
-            "4. Water\n\n" +
-
-
-           
-
-            "INTENT UNDERSTANDING:\n" +
-            "First determine the user's intent.\n" +
-            "The user may be asking you to:\n" +
-            "- create something\n" +
-            "- modify something\n" +
-            "- remove something\n" +
-            "- move something\n" +
-            "- restore something\n" +
-            "- ask for design advice\n" +
-            "- ask what would look good\n" +
-            "- ask whether something is possible\n" +
-            "- ask an ambiguous question that requires clarification\n" +
-            "- ask you to apply a recommendation from earlier in the conversation\n\n" +
-
-            "Do not treat every sentence as an instruction to modify the environment.\n\n" +
-
-
-            
-
-            "DESIGN ADVICE:\n" +
-            "If the user asks for suggestions, recommendations, opinions, explanations, or design guidance, use commandType = \"advice\".\n" +
-            "Do NOT modify the Unity environment merely because the user asks for advice.\n\n" +
-
-            "When useful, advice SHOULD include ONE PRIMARY ACTIONABLE RECOMMENDATION.\n" +
-            "Put the human-readable recommendation in assistantMessage.\n" +
-            "Put the executable recommendation in suggestedCommand.\n" +
-            "The suggestedCommand must be a normal supported Unity command.\n\n" +
-
-            "For example, if the user asks:\n" +
-            "\"How can I improve this area?\"\n\n" +
-            "you may answer with advice such as:\n" +
-            "\"Adding a small group of trees would make the area feel more natural.\"\n\n" +
-            "and provide a suggestedCommand that plants trees.\n\n" +
-
-            "The suggestedCommand is OPTIONAL.\n" +
-            "Use it when your advice naturally leads to one clear supported action.\n" +
-            "Do NOT invent a suggestedCommand for unsupported functionality.\n\n" +
-
-            "IMPORTANT:\n" +
-            "Give ONE primary executable recommendation, not a list of multiple executable commands.\n" +
-            "The current command protocol executes one command at a time.\n\n" +
-
-
-         
-
-            "APPLYING ADVICE:\n" +
-            "If the user says \"do it\", \"do that\", \"apply it\", \"go ahead\", or similar and the previous assistant advice contained a suggestedCommand, the user is asking you to apply that previous recommendation.\n" +
-            "Return the actual executable command rather than another advice response.\n" +
-            "Use the previous recommendation as the intended action.\n\n" +
-
-
-            
-
-            "CLARIFICATION:\n" +
-            "If the user request is genuinely ambiguous, do not guess.\n" +
-            "Use commandType = \"unknown\".\n" +
-            "Use the reason field to explain what information is missing.\n" +
-            "Ask the user to clarify in a natural way.\n\n" +
-
-
-            // =================================================
-            // TERRAIN
-            // =================================================
-
-            "IMPORTANT TERRAIN RULE:\n" +
-            "There is ALREADY a Unity Terrain in the scene.\n" +
-            "NEVER create a new Unity Terrain.\n" +
-            "NEVER replace the existing Terrain.\n" +
-            "NEVER delete the existing Terrain.\n" +
-            "Terrain commands modify the EXISTING Terrain.\n\n" +
-
-
-            // =================================================
-            // MOUNTAIN POINTING
-            // =================================================
-
-            "IMPORTANT MOUNTAIN POINTING RULE:\n" +
-            "Mountains exist on the existing Unity Terrain.\n" +
-            "Unity provides the CURRENT pointed Terrain ground position.\n" +
-            "The CURRENT pointed world position is the ONLY reference used to identify the mountain for modification.\n" +
-            "This works for BOTH mountains that already existed on the Terrain and mountains generated by Unity.\n" +
-            "Mountain IDs are NOT required and are NOT used for mountain modification.\n" +
-            "If the user says 'this mountain', use the CURRENT pointed Terrain ground position.\n" +
-            "If the user says 'this mountain is too short', modify the mountain at the CURRENT pointed Terrain ground position.\n" +
-            "If the user says 'make this mountain taller', modify the mountain at the CURRENT pointed Terrain ground position.\n" +
-            "If the user says 'make this mountain shorter', modify the mountain at the CURRENT pointed Terrain ground position.\n" +
-            "If the user asks to change the height of the pointed mountain, use the CURRENT pointed Terrain ground position.\n" +
-            "If Unity did NOT provide a current pointed Terrain ground position, do not invent one.\n\n" +
-
-
-            // =================================================
-            // TREE POINTING
-            // =================================================
-
-            "TREE POINTING:\n" +
-            "Unity may provide a selected tree.\n" +
-            "Unity may provide a pointed ground position.\n" +
-            "If the user says 'this tree', use the selected tree.\n" +
-            "If the user says 'over there', use the pointed ground position.\n" +
-            "NEVER invent a tree ID.\n" +
-            "NEVER invent movement coordinates.\n\n" +
-
-
-            // =================================================
-            // WATER
-            // =================================================
-
-            "WATER SYSTEM:\n" +
-            "You can control water using commandType = \"water\".\n" +
-            "Allowed actions:\n" +
-            "- create_river\n" +
-            "- create_lake\n" +
-            "- delete\n\n" +
-
-            "When the user asks to create a river or lake:\n" +
-            "- Do NOT ask the user to point.\n" +
-            "- Do NOT generate coordinates.\n" +
-            "- Do NOT use the pointing position.\n" +
-            "- WaterManager automatically chooses a random nearby safe location.\n" +
-            "- WaterManager avoids mountains and steep terrain.\n" +
-            "- Water may be close to mountains, but should not overlap mountains.\n\n" +
-
-            "IMPORTANT WATER COMMAND RULE:\n" +
-            "The water command contains ONLY the action.\n" +
-            "Do NOT add centerX.\n" +
-            "Do NOT add centerZ.\n" +
-            "Do NOT add coordinates or pointing positions to the water command.\n\n" +
-
-
-            // =================================================
-            // BUILDINGS
-            // =================================================
-
-            "IMPORTANT BUILDING RULE:\n" +
-            "BuildingGenerator creates buildings on the existing terrain.\n" +
-            "BuildingGenerator controls valid placement, terrain height, slope, spacing and rotation.\n" +
-            "Do NOT invent building coordinates or IDs.\n\n" +
-
-
-            // =================================================
-            // CAPABILITY
-            // =================================================
-
-            "CAPABILITY AWARENESS:\n" +
-            "Only promise functionality represented by the supported commands below.\n" +
-            "The current system can create and modify mountains, plant/remove/move trees, create/remove buildings, and create/remove rivers and lakes.\n" +
-            "The system does NOT currently provide arbitrary procedural generation of every possible object.\n" +
-            "For example, do not pretend that you can directly create a waterfall, road, bridge, fence, road network, animal, vehicle, or arbitrary custom object unless an available command explicitly supports it.\n" +
-            "If a request cannot be represented by the available commands, use commandType = \"unknown\" and explain the limitation.\n" +
-            "Do not hallucinate new Unity functions or systems.\n\n" +
-
-
-            // =================================================
-            // CONFIDENCE
-            // =================================================
-
-            "CONFIDENCE:\n" +
-            "Every command MUST contain:\n" +
-            "\"confidence\": a number from 0.0 to 1.0\n" +
-            "\"reason\": a short explanation.\n" +
-            "0.80 to 1.00 = high confidence.\n" +
-            "0.50 to 0.79 = medium confidence.\n" +
-            "Below 0.50 = low confidence.\n" +
-            "Do NOT artificially increase confidence.\n\n" +
-
-
-            // =================================================
-            // UNKNOWN
-            // =================================================
-
-            "UNKNOWN:\n" +
-            "If the request is unclear or unsupported, return:\n" +
+            "MULTI-COMMAND RULES:\n" +
+            "If the user requests multiple independent actions, return:\n" +
             "{\n" +
-            "  \"commandType\":\"unknown\",\n" +
-            "  \"confidence\":0.20,\n" +
-            "  \"reason\":\"Explain clearly why the request cannot currently be performed or what clarification is required.\"\n" +
+            "  \"commands\":[\n" +
+            "    {\"commandType\":\"terrain\", ...},\n" +
+            "    {\"commandType\":\"trees\", ...}\n" +
+            "  ]\n" +
+            "}\n" +
+            "Each item is one normal command. Never nest a commands array inside a command.\n" +
+            "Examples:\n" +
+            "\"create a mountain and a lake\" -> two commands.\n" +
+            "\"create a mountain, a lake and 20 trees\" -> three commands.\n" +
+            "\"create two mountains and a river\" -> two commands (mountains with count 2, river).\n" +
+            "\"plant 30 trees and create a mountain here\" -> two commands.\n\n" +
+
+            // ---------------- TERRAIN ----------------
+
+            "TERRAIN RULE:\n" +
+            "A Unity Terrain ALREADY exists. Terrain commands MODIFY it.\n" +
+            "Never create, replace or delete the terrain itself. \"delete the terrain\" -> unknown.\n\n" +
+
+            // ---------------- IDS / POSITIONS ----------------
+
+            "IDS AND POSITIONS:\n" +
+            "Unity owns every object ID (trees, mountains, rivers, lakes) and every coordinate.\n" +
+            "NEVER put IDs or coordinates in the JSON.\n" +
+            "'this tree', 'this mountain', 'this river', 'this lake' and 'it' refer to the object Unity reports as selected.\n" +
+            "If that object is 'none', return unknown.\n" +
+            "'here', 'there', 'over there', 'where I am pointing' -> usePointedPosition = true.\n" +
+            "Otherwise usePointedPosition = false.\n\n" +
+
+            // ---------------- DISAMBIGUATION ----------------
+
+            "DISAMBIGUATION:\n" +
+            "The object the user names decides the system:\n" +
+            "river, stream, creek, waterway -> terrain / river or modify_river\n" +
+            "lake, pond -> terrain / lake or modify_lake\n" +
+            "mountain, hill, peak -> terrain / mountain, mountains or modify_mountain\n" +
+            "tree, forest -> trees\n" +
+            "XR selection never changes the named object. If a tree is selected and the user says " +
+            "'create a river', create a river. Selection only matters for 'this ...' or 'it'.\n\n" +
+
+            // ---------------- TERRAIN ACTIONS ----------------
+
+            "TERRAIN COMMANDS (commandType = \"terrain\"):\n" +
+            "Fields: action, count, heightChange, widthChange, lengthChange, depthChange, usePointedPosition.\n" +
+            "Actions:\n" +
+            "mountain, mountains, river, rivers, lake, lakes,\n" +
+            "modify_mountain, modify_river, modify_lake,\n" +
+            "delete_mountain, delete_river, delete_lake, reset\n\n" +
+
+            "Examples:\n" +
+            "\"create a mountain\" -> mountain\n" +
+            "\"create 3 mountains\" -> mountains, count 3\n" +
+            "\"create a mountain here\" -> mountain, usePointedPosition true\n" +
+            "\"create a river\" -> river, count 1\n" +
+            "\"create a lake\" -> lake, count 1\n" +
+            "\"make this mountain taller\" -> modify_mountain, heightChange 5\n" +
+            "\"make this mountain shorter\" -> modify_mountain, heightChange -5\n" +
+            "\"make this river wider\" -> modify_river, widthChange 5\n" +
+            "\"make this river narrower\" -> modify_river, widthChange -5\n" +
+            "\"make this river deeper\" -> modify_river, depthChange 1\n" +
+            "\"make this river shallower\" -> modify_river, depthChange -1\n" +
+            "\"make this lake wider\" -> modify_lake, widthChange 5\n" +
+            "\"make this lake longer\" -> modify_lake, lengthChange 5\n" +
+            "\"make this lake shorter\" -> modify_lake, lengthChange -5\n" +
+            "\"make this lake deeper\" -> modify_lake, depthChange 1\n" +
+            "\"delete this mountain\" -> delete_mountain\n" +
+            "\"delete this river\" -> delete_river\n" +
+            "\"delete this lake\" -> delete_lake\n" +
+            "\"reset the terrain\" -> reset\n\n" +
+
+            "Example JSON:\n" +
+            "{\n" +
+            "  \"commandType\":\"terrain\",\n" +
+            "  \"confidence\":0.95,\n" +
+            "  \"reason\":\"The user explicitly requested a river.\",\n" +
+            "  \"terrain\":{\"action\":\"river\",\"count\":1,\"usePointedPosition\":false}\n" +
             "}\n\n" +
 
+            // ---------------- TREE ACTIONS ----------------
 
-            // =================================================
-            // TERRAIN COMMANDS
-            // =================================================
+            "TREE COMMANDS (commandType = \"trees\"):\n" +
+            "Fields: action, treeType, count, radius, spacing, usePointedPosition.\n" +
+            "Actions: plant_trees, remove_trees, remove_all_trees, delete_tree, move_tree\n" +
+            "Tree types: Oak, Palm, Birch, Maple, Eucalyptus, Apple, mixed. There is no Pine.\n" +
+            "If no type is given, use mixed.\n\n" +
 
-            "TERRAIN:\n" +
-            "Use commandType = \"terrain\".\n" +
-            "The terrain already exists.\n\n" +
+            "Examples:\n" +
+            "\"plant 20 oak trees\" -> plant_trees, treeType Oak, count 20\n" +
+            "\"plant some palm trees here\" -> plant_trees, treeType Palm, count 10, usePointedPosition true\n" +
+            "\"remove the trees here\" -> remove_trees, radius 10, usePointedPosition true\n" +
+            "\"remove all trees\" -> remove_all_trees\n" +
+            "\"delete this tree\" -> delete_tree\n" +
+            "\"move this tree over there\" -> move_tree\n\n" +
 
-            "Supported terrain actions:\n" +
-            "mountain\n" +
-            "mountains\n" +
-            "modify_mountain\n" +
-            "reset\n\n" +
-
-            "\"create a mountain\" -> mountain\n" +
-            "\"create mountains\" -> mountains\n" +
-            "\"create a range of mountain\" -> moutain_range\n"+
-            "\"make the terrain mountainous\" -> mountain\n\n" +
-
-            "If the user refers to a pointed mountain:\n" +
-            "\"make this mountain taller\" -> modify_mountain\n" +
-            "\"make this mountain shorter\" -> modify_mountain\n" +
-            "\"change this mountain\" -> modify_mountain\n" +
-            "\"modify this mountain\" -> modify_mountain\n\n" +
-
-            "For mountain height changes, use heightChange:\n" +
-            "taller / higher / raise -> positive heightChange, normally 5\n" +
-            "shorter / lower / reduce -> negative heightChange, normally -5\n\n" +
-
-
-            // =================================================
-            // TREES
-            // =================================================
-
-            "TREES:\n" +
-            "Use commandType = \"trees\".\n\n" +
-
-            "Supported actions:\n" +
-            "plant_trees\n" +
-            "remove_trees\n" +
-            "remove_all_trees\n" +
-            "move_tree\n\n" +
-
-            "Tree types may include:\n" +
-            "Oak\n" +
-            "Pine\n" +
-            "Palm\n" +
-            "Birch\n" +
-            "Maple\n" +
-            "Eucalyptus\n" +
-            "Apple\n" +
-            "mixed\n\n" +
-
-
-          
-
-            "TREE PLANTING:\n" +
-            "The tree planting command uses centerX, centerZ, radius and spacing.\n" +
-            "These are implementation parameters required by Unity.\n" +
-            "Do not use imaginary spatial coordinates from the conversation.\n" +
-            "If the user gives explicit numerical coordinates, they may be used as requested.\n" +
-            "Otherwise use reasonable defaults for a general planting request.\n\n" +
-
-
-            // =================================================
-            // MOVE TREE
-            // =================================================
-
-            "MOVE TREE:\n" +
-            "If the user says:\n" +
-            "\"move this tree over there\"\n" +
-            "\"put this tree there\"\n" +
-            "\"move it over there\"\n\n" +
-
-            "and Unity provides a selected tree and ground position, return:\n" +
+            "Example JSON:\n" +
             "{\n" +
             "  \"commandType\":\"trees\",\n" +
             "  \"confidence\":0.95,\n" +
             "  \"reason\":\"The user requested moving the selected tree to the pointed location.\",\n" +
-            "  \"trees\":{\n" +
-            "    \"action\":\"move_tree\",\n" +
-            "    \"treeType\":\"\"\n" +
-            "  }\n" +
+            "  \"trees\":{\"action\":\"move_tree\",\"treeType\":\"\"}\n" +
             "}\n\n" +
 
+            // ---------------- CONFIDENCE ----------------
 
-            // =================================================
-            // BUILDINGS
-            // =================================================
+            "CONFIDENCE:\n" +
+            "Every command MUST contain \"confidence\" (0.0 to 1.0) and a short \"reason\".\n" +
+            "0.80-1.00 = clear request. 0.50-0.79 = probable interpretation. Below 0.50 = guess.\n" +
+            "Do not inflate confidence.\n\n" +
 
-            "BUILDINGS:\n" +
-            "Use commandType = \"building\".\n\n" +
+            // ---------------- UNKNOWN ----------------
 
-            "Supported building types:\n" +
-            "House\n" +
-            "Temple\n" +
-            "Random building\n\n" +
-
-            "BuildingGenerator chooses the physical location.\n" +
-            "Do NOT invent coordinates.\n\n" +
-
-            "\"create a house\" -> create_house\n" +
-            "\"create 5 houses\" -> create_houses, count 5\n" +
-            "\"create a temple\" -> create_temple\n" +
-            "\"create 3 temples\" -> create_temples, count 3\n" +
-            "\"create a random building\" -> create_random\n" +
-            "\"create 10 random buildings\" -> create_random_buildings, count 10\n" +
-            "\"remove all buildings\" -> clear_buildings\n\n" +
-
-
-            // =================================================
-            // WATER
-            // =================================================
-
-            "WATER EXAMPLES:\n" +
-
-            "\"create a river\"\n" +
+            "UNKNOWN:\n" +
+            "If the request is unclear, unsupported or refers to an object that is not selected, return:\n" +
             "{\n" +
-            "  \"commandType\":\"water\",\n" +
-            "  \"confidence\":1.0,\n" +
-            "  \"reason\":\"User requested a river.\",\n" +
-            "  \"water\":{\n" +
-            "    \"action\":\"create_river\"\n" +
-            "  }\n" +
+            "  \"commandType\":\"unknown\",\n" +
+            "  \"confidence\":0.20,\n" +
+            "  \"reason\":\"<short explanation the user will read>\"\n" +
             "}\n\n" +
 
-            "\"make a lake\"\n" +
-            "{\n" +
-            "  \"commandType\":\"water\",\n" +
-            "  \"confidence\":1.0,\n" +
-            "  \"reason\":\"User requested a lake.\",\n" +
-            "  \"water\":{\n" +
-            "    \"action\":\"create_lake\"\n" +
-            "  }\n" +
-            "}\n\n" +
-
-
-            // =================================================
-            // ADVICE EXAMPLE
-            // =================================================
-
-            "ADVICE EXAMPLE:\n" +
-            "If the user asks:\n" +
-            "\"What would look good around this mountain?\"\n\n" +
-
-            "Return an advice response similar to:\n" +
-            "{\n" +
-            "  \"commandType\":\"advice\",\n" +
-            "  \"confidence\":0.90,\n" +
-            "  \"reason\":\"The user is asking for design advice rather than requesting an immediate modification.\",\n" +
-            "  \"assistantMessage\":\"A natural-looking approach would be to add a small group of trees around the lower slopes while leaving some open space near the mountain.\",\n" +
-            "  \"suggestedCommand\":{\n" +
-            "    \"commandType\":\"trees\",\n" +
-            "    \"confidence\":0.95,\n" +
-            "    \"reason\":\"This recommendation can be implemented by the Unity tree system.\",\n" +
-            "    \"trees\":{\n" +
-            "      \"action\":\"plant_trees\",\n" +
-            "      \"treeType\":\"mixed\",\n" +
-            "      \"count\":20,\n" +
-            "      \"centerX\":0,\n" +
-            "      \"centerZ\":0,\n" +
-            "      \"radius\":15,\n" +
-            "      \"spacing\":3\n" +
-            "    }\n" +
-            "  }\n" +
-            "}\n\n" +
-
-
-            // =================================================
-            // APPLY ADVICE EXAMPLE
-            // =================================================
-
-            "APPLY ADVICE EXAMPLE:\n" +
-            "If the previous advice recommended planting trees and the user says:\n" +
-            "\"Do it\"\n" +
-            "\"Do that\"\n" +
-            "\"Apply it\"\n" +
-            "\"Go ahead\"\n\n" +
-
-            "return the actual executable trees command rather than commandType = advice.\n\n" +
-
-
-            // =================================================
-            // FINAL RULES
-            // =================================================
+            // ---------------- FINAL ----------------
 
             "FINAL RULES:\n" +
-            "1. Return exactly ONE JSON command.\n" +
-            "2. Return ONLY JSON.\n" +
-            "3. Always include confidence.\n" +
-            "4. Always include reason.\n" +
-            "5. Never guess genuinely ambiguous requests.\n" +
-            "6. Use unknown when necessary.\n" +
-            "7. Never invent tree IDs.\n" +
-            "8. Never invent mountain IDs.\n" +
-            "9. Never invent movement coordinates.\n" +
-            "10. Never invent building coordinates.\n" +
-            "11. Never invent building IDs.\n" +
-            "12. Never claim Unity performed an action.\n" +
-            "13. Terrain means MODIFY THE EXISTING TERRAIN.\n" +
-            "14. NEVER CREATE A NEW TERRAIN.\n" +
-            "15. NEVER DELETE OR REPLACE THE EXISTING TERRAIN.\n" +
-            "16. Unity owns tree IDs.\n" +
-            "17. Unity owns physical object placement logic.\n" +
-            "18. Use advice when the user asks for design guidance rather than an action.\n" +
-            "19. Advice may contain ONE suggestedCommand when there is one clear supported recommendation.\n" +
-            "20. If the user asks to apply previous advice, execute the previous supported recommendation.\n" +
-            "21. Use unknown when the requested capability does not exist.\n" +
-            "22. Do not invent functionality that Unity does not provide.\n" +
-            "23. Interpret natural language rather than requiring exact command wording.\n";
+            "1. Return ONLY JSON.\n" +
+            "2. Use a commands array for multiple independent actions.\n" +
+            "3. Always include confidence and reason.\n" +
+            "4. Never guess ambiguous requests; use unknown.\n" +
+            "5. Never put IDs or coordinates in the JSON.\n" +
+            "6. Never create, replace or delete the existing terrain.\n" +
+            "7. Do not let XR selection override an explicitly named object.\n" +
+            "8. Never claim Unity performed an action.\n";
     }
 
 
@@ -3770,252 +2029,140 @@ public class DemoChat : MonoBehaviour
     private string ExtractJson(string text)
     {
         if (string.IsNullOrEmpty(text))
-        {
             return null;
-        }
 
-        text =
-            text.Trim();
+        // Fallback in case the model still emits reasoning.
+        text = Regex.Replace(text, @"<think>.*?</think>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"```json\s*", "", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"```\s*", "");
+        text = text.Trim();
 
-        text =
-            Regex.Replace(
-                text,
-                @"```json\s*",
-                "",
-                RegexOptions.IgnoreCase
-            );
+        int start = text.IndexOf('{');
+        int end = text.LastIndexOf('}');
 
-        text =
-            Regex.Replace(
-                text,
-                @"```\s*",
-                "",
-                RegexOptions.IgnoreCase
-            );
-
-        int start =
-            text.IndexOf('{');
-
-        int end =
-            text.LastIndexOf('}');
-
-        if (
-            start < 0 ||
-            end <= start
-        )
-        {
+        if (start < 0 || end <= start)
             return null;
-        }
 
-        return text.Substring(
-            start,
-            end - start + 1
-        );
+        return text.Substring(start, end - start + 1);
     }
 
 
     // =========================================================
-    // OUTPUT
+    // OUTPUT / BUTTON / FINISH
     // =========================================================
 
     private void SetOutput(string message)
     {
         if (outputText != null)
-        {
-            outputText.text =
-                message;
-        }
+            outputText.text = message;
 
-        Debug.Log(
-            "[DemoChat] " +
-            message
-        );
+        Debug.Log("[DemoChat] " + message);
     }
-
-
-    // =========================================================
-    // BUTTON
-    // =========================================================
 
     private void SetButtonInteractable(bool value)
     {
         if (sendButton != null)
-        {
-            sendButton.interactable =
-                value;
-        }
+            sendButton.interactable = value;
     }
 
-
-    // =========================================================
-    // FINISH
-    // =========================================================
-
-    private void FinishRequest(
-        TaskCompletionSource<bool> completionSource,
-        bool success
-    )
+    private void FinishRequest(TaskCompletionSource<bool> completionSource, bool success)
     {
         isGenerating = false;
-
         SetButtonInteractable(true);
 
         if (completionSource != null)
-        {
-            completionSource.TrySetResult(
-                success
-            );
-        }
+            completionSource.TrySetResult(success);
     }
 
 
     // =========================================================
-    // SPATIAL CONTEXT
+    // DATA CLASSES
     // =========================================================
 
     [Serializable]
     private class SpatialContext
     {
-        // TREE
-
+        // Tree
         public bool hasSelectedTree;
-
         public int selectedTreeIndex;
-
         public string selectedTreeName;
-
         public string selectedTreeType;
 
-
-        // CURRENT POINTED TERRAIN POSITION
-
+        // Ground
         public bool hasGroundPosition;
-
         public Vector3 groundPosition;
+
+        // Mountain
+        public bool hasSelectedMountain;
+        public int selectedMountainIndex;
+        public string selectedMountainName;
+
+        // Water
+        public bool hasSelectedRiver;
+        public int selectedRiverId;
+        public bool hasSelectedLake;
+        public int selectedLakeId;
     }
-
-
-    // =========================================================
-    // CONVERSATION TURN
-    // =========================================================
-
-    [Serializable]
-    private class ConversationTurn
-    {
-        public string userMessage;
-
-        public string assistantResult;
-    }
-
-
-    // =========================================================
-    // LANDSCAPE COMMAND
-    // =========================================================
 
     [Serializable]
     private class LandscapeCommand
     {
         public string commandType;
-
         public float confidence;
-
         public string reason;
-
-        // Used when commandType = advice.
-        public string assistantMessage;
-
-        // NEW:
-        // The single primary actionable recommendation
-        // associated with advice.
-        public LandscapeCommand suggestedCommand;
-
         public TerrainCommand terrain;
-
         public TreeCommand trees;
-
-        public BuildingCommand building;
-
-        public WaterCommand water;
     }
-
-
-    // =========================================================
-    // WATER COMMAND
-    // =========================================================
 
     [Serializable]
-    private class WaterCommand
+    private class MultiLandscapeCommand
     {
-        public string action;
+        public LandscapeCommand[] commands;
     }
-
-
-   
 
     [Serializable]
     private class TerrainCommand
     {
         public string action;
-
         public int count;
 
         // Positive = taller, negative = shorter.
         public float heightChange;
+
+        // Water modification
+        public float widthChange;
+        public float lengthChange;
+        public float depthChange;
+
+        public bool usePointedPosition;
     }
-
-
-    
 
     [Serializable]
     private class TreeCommand
     {
         public string action;
-
         public string treeType;
-
         public int count;
 
+        // Set by Unity from the pointed position, never by the AI.
         public float centerX;
-
         public float centerZ;
 
         public float radius;
-
         public float spacing;
+
+        public bool usePointedPosition;
     }
-
-
-    // =========================================================
-    // BUILDING COMMAND
-    // =========================================================
-
-    [Serializable]
-    private class BuildingCommand
-    {
-        public string action;
-
-        public string buildingType;
-
-        public int count;
-    }
-
-
-    // =========================================================
-    // OLLAMA REQUEST
-    // =========================================================
 
     [Serializable]
     private class OllamaRequest
     {
         public string model;
-
         public bool stream;
-
+        public bool think;
+        public string format;
         public OllamaMessage[] messages;
     }
-
-
-    
 
     [Serializable]
     private class OllamaResponse
@@ -4023,27 +2170,21 @@ public class DemoChat : MonoBehaviour
         public OllamaMessage message;
     }
 
-
- 
-
     [Serializable]
     private class OllamaMessage
     {
         public string role;
-
         public string content;
     }
 
 
-   
+    // =========================================================
+    // CLEANUP
+    // =========================================================
 
     private void OnDestroy()
     {
         if (sendButton != null)
-        {
-            sendButton.onClick.RemoveListener(
-                SendCurrentPrompt
-            );
-        }
+            sendButton.onClick.RemoveListener(SendCurrentPrompt);
     }
 }

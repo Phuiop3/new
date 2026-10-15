@@ -181,21 +181,74 @@ public class WaterManager : MonoBehaviour
     private bool generateRiverOnStart = false;
 
 
+
     // =========================================================
-    // INTERNAL WATER DATA
+    // MODIFY / VISIBILITY SETTINGS
     // =========================================================
 
-    private class LakeInfo
+    [Header("Modify Settings")]
+
+    [Tooltip("Smallest depth change applied by 'deeper' or 'shallower', so the change can be seen.")]
+    [SerializeField]
+    private float minimumDepthStep = 3f;
+
+    [Tooltip("Smallest width change applied by 'wider' or 'narrower'.")]
+    [SerializeField]
+    private float minimumWidthStep = 4f;
+
+    [Tooltip("How far the water surface sits below the surrounding ground. The surface stays at this level when the bed is lowered.")]
+    [SerializeField]
+    private float surfaceDrop = 0.3f;
+
+    [Tooltip("Colour the water by depth so 'deeper' and 'shallower' are visible from above.")]
+    [SerializeField]
+    private bool tintWaterByDepth = true;
+
+    [SerializeField]
+    private Color shallowWaterColor = new Color(0.30f, 0.62f, 0.78f, 0.85f);
+
+    [SerializeField]
+    private Color deepWaterColor = new Color(0.02f, 0.12f, 0.32f, 0.95f);
+
+    [Tooltip("Depth (m) at which the water reaches the deep colour.")]
+    [SerializeField]
+    private float depthForDeepestColor = 12f;
+
+
+    // =========================================================
+    // WATER DATA (public: used by DemoChat and WaterPointingDetector)
+    // =========================================================
+
+    public class CarveRecord
     {
-        public Vector3 center;
-        public float radiusX;
-        public float radiusZ;
+        public int x0;
+        public int y0;
+        public float[,] delta;
     }
 
-    private class RiverInfo
+    public class LakeInfo
     {
-        public List<Vector3> path;
-        public float radius;
+        public int id;
+        public Vector3 center;
+        public float groundY;      // ground height at the centre before carving
+        public float width;
+        public float length;
+        public float depth;
+        public float radiusX;      // footprint incl. bank + margin (used for spacing)
+        public float radiusZ;
+        public GameObject waterObject;
+        public CarveRecord carve;
+    }
+
+    public class RiverInfo
+    {
+        public int id;
+        public List<Vector3> path; // y = ground height before carving
+        public float width;
+        public float depth;
+        public float radius;       // footprint incl. bank + margin (used for spacing)
+        public GameObject waterObject;
+        public CarveRecord carve;
     }
 
     private readonly List<LakeInfo> generatedLakes =
@@ -203,6 +256,9 @@ public class WaterManager : MonoBehaviour
 
     private readonly List<RiverInfo> generatedRivers =
         new List<RiverInfo>();
+
+    private int nextLakeId = 0;
+    private int nextRiverId = 0;
 
 
     // =========================================================
@@ -452,58 +508,37 @@ public class WaterManager : MonoBehaviour
         ResolvePlayerTransform();
 
         if (targetTerrain == null)
-        {
             return;
-        }
 
         if (!ValidateRiverSettings())
-        {
             return;
-        }
 
         PrepareForNewWater();
 
-        List<Vector3> path =
-            FindSafeRiverPath();
+        List<Vector3> path = FindSafeRiverPath();
 
-        if (path == null ||
-            path.Count < 2)
+        if (path == null || path.Count < 2)
         {
-            Debug.LogWarning(
-                "WaterManager: Could not find a safe nearby location for the river."
-            );
-
+            Debug.LogWarning("WaterManager: Could not find a safe nearby location for the river.");
             return;
         }
 
         CreateWaterParent();
 
-        ShapeRiverTerrain(path);
+        RiverInfo river = new RiverInfo();
+        river.id = nextRiverId++;
+        river.path = new List<Vector3>(path);
+        river.width = riverWidth;
+        river.depth = riverDepth;
+        UpdateRiverFootprint(river);
 
-        CreateRiverWater(path);
-
-        RiverInfo river =
-            new RiverInfo();
-
-        river.path =
-            new List<Vector3>(path);
-
-        river.radius =
-            riverWidth * 0.5f +
-            riverBankWidth +
-            placementMargin;
-
-        generatedRivers.Add(
-            river
-        );
+        BuildRiver(river);
+        generatedRivers.Add(river);
 
         RefreshTerrain();
 
-        Debug.Log(
-            "WaterManager: Natural river created. " +
-            "Total rivers: " +
-            generatedRivers.Count
-        );
+        Debug.Log("WaterManager: Natural river created. ID = " + river.id +
+                  " | Total rivers: " + generatedRivers.Count);
     }
 
 
@@ -518,62 +553,698 @@ public class WaterManager : MonoBehaviour
         ResolvePlayerTransform();
 
         if (targetTerrain == null)
-        {
             return;
-        }
 
         if (!ValidateLakeSettings())
-        {
             return;
-        }
 
         PrepareForNewWater();
 
         Vector3 center;
 
-        if (!FindSafeLakeLocation(
-                out center))
+        if (!FindSafeLakeLocation(out center))
         {
-            Debug.LogWarning(
-                "WaterManager: Could not find a safe nearby location for the lake."
-            );
-
+            Debug.LogWarning("WaterManager: Could not find a safe nearby location for the lake.");
             return;
         }
 
         CreateWaterParent();
 
-        ShapeLakeTerrain(center);
+        LakeInfo lake = new LakeInfo();
+        lake.id = nextLakeId++;
+        lake.center = center;
+        lake.groundY = center.y;
+        lake.width = lakeWidth;
+        lake.length = lakeLength;
+        lake.depth = lakeDepth;
+        UpdateLakeFootprint(lake);
 
-        CreateLakeWater(center);
-
-        LakeInfo lake =
-            new LakeInfo();
-
-        lake.center =
-            center;
-
-        lake.radiusX =
-            lakeWidth * 0.5f +
-            lakeBankWidth +
-            placementMargin;
-
-        lake.radiusZ =
-            lakeLength * 0.5f +
-            lakeBankWidth +
-            placementMargin;
-
-        generatedLakes.Add(
-            lake
-        );
+        BuildLake(lake);
+        generatedLakes.Add(lake);
 
         RefreshTerrain();
 
-        Debug.Log(
-            "WaterManager: Natural lake created. " +
-            "Total lakes: " +
-            generatedLakes.Count
-        );
+        Debug.Log("WaterManager: Natural lake created. ID = " + lake.id +
+                  " | Total lakes: " + generatedLakes.Count);
+    }
+
+
+    // =========================================================
+    // PUBLIC: LOOK-UP
+    // =========================================================
+
+    public RiverInfo GetRiverById(int id)
+    {
+        foreach (RiverInfo river in generatedRivers)
+            if (river != null && river.id == id)
+                return river;
+
+        return null;
+    }
+
+    public LakeInfo GetLakeById(int id)
+    {
+        foreach (LakeInfo lake in generatedLakes)
+            if (lake != null && lake.id == id)
+                return lake;
+
+        return null;
+    }
+
+    public IReadOnlyList<RiverInfo> GetRivers()
+    {
+        return generatedRivers;
+    }
+
+    public IReadOnlyList<LakeInfo> GetLakes()
+    {
+        return generatedLakes;
+    }
+
+    public int GetRiverCount()
+    {
+        return generatedRivers.Count;
+    }
+
+    public int GetLakeCount()
+    {
+        return generatedLakes.Count;
+    }
+
+    // Returns the river whose water covers the given world position, or -1.
+    public int FindRiverAtPosition(Vector3 worldPosition, float extraTolerance = 2f)
+    {
+        int bestId = -1;
+        float best = float.MaxValue;
+        Vector3 p = new Vector3(worldPosition.x, 0f, worldPosition.z);
+
+        foreach (RiverInfo river in generatedRivers)
+        {
+            if (river == null || river.path == null)
+                continue;
+
+            float d = DistanceToRiver(p, river.path);
+
+            if (d <= river.width * 0.5f + riverBankWidth + extraTolerance && d < best)
+            {
+                best = d;
+                bestId = river.id;
+            }
+        }
+
+        return bestId;
+    }
+
+    // Returns the lake whose water covers the given world position, or -1.
+    public int FindLakeAtPosition(Vector3 worldPosition, float extraTolerance = 2f)
+    {
+        int bestId = -1;
+        float best = float.MaxValue;
+
+        foreach (LakeInfo lake in generatedLakes)
+        {
+            if (lake == null)
+                continue;
+
+            float rx = lake.width * 0.5f + lakeBankWidth + extraTolerance;
+            float rz = lake.length * 0.5f + lakeBankWidth + extraTolerance;
+            float dx = (worldPosition.x - lake.center.x) / rx;
+            float dz = (worldPosition.z - lake.center.z) / rz;
+            float d = dx * dx + dz * dz;
+
+            if (d <= 1f && d < best)
+            {
+                best = d;
+                bestId = lake.id;
+            }
+        }
+
+        return bestId;
+    }
+
+
+    // =========================================================
+    // PUBLIC: MODIFY
+    // =========================================================
+    //
+    // The water surface stays where it is and only the bed is
+    // lowered or raised, so "deeper" no longer moves the water
+    // down with the bed. Small requested changes are enlarged to
+    // a minimum step so that the change can be seen.
+    //
+    // =========================================================
+
+    public bool ModifyRiver(int id, float newWidth, float newDepth)
+    {
+        RiverInfo river = GetRiverById(id);
+
+        if (river == null || targetTerrain == null)
+            return false;
+
+        float width = ApplyMinimumStep(river.width, newWidth, minimumWidthStep, 2f, 100f);
+        float depth = ApplyMinimumStep(river.depth, newDepth, minimumDepthStep, 0.5f, 20f);
+
+        UndoCarve(river.carve);
+        DestroyWaterObject(river.waterObject);
+
+        river.width = width;
+        river.depth = depth;
+        UpdateRiverFootprint(river);
+
+        BuildRiver(river);
+        RefreshTerrain();
+
+        Debug.Log("WaterManager: River " + id + " modified. Width = " + width.ToString("F1") +
+                  " m, depth = " + depth.ToString("F1") + " m.");
+
+        return true;
+    }
+
+    public bool ModifyLake(int id, float newWidth, float newLength, float newDepth)
+    {
+        LakeInfo lake = GetLakeById(id);
+
+        if (lake == null || targetTerrain == null)
+            return false;
+
+        float width = ApplyMinimumStep(lake.width, newWidth, minimumWidthStep, 5f, 150f);
+        float length = ApplyMinimumStep(lake.length, newLength, minimumWidthStep, 5f, 150f);
+        float depth = ApplyMinimumStep(lake.depth, newDepth, minimumDepthStep, 0.5f, 20f);
+
+        UndoCarve(lake.carve);
+        DestroyWaterObject(lake.waterObject);
+
+        lake.width = width;
+        lake.length = length;
+        lake.depth = depth;
+        UpdateLakeFootprint(lake);
+
+        BuildLake(lake);
+        RefreshTerrain();
+
+        Debug.Log("WaterManager: Lake " + id + " modified. Width = " + width.ToString("F1") +
+                  " m, length = " + length.ToString("F1") + " m, depth = " + depth.ToString("F1") + " m.");
+
+        return true;
+    }
+
+    private float ApplyMinimumStep(float current, float requested, float minimumStep, float min, float max)
+    {
+        float change = requested - current;
+
+        if (Mathf.Abs(change) < 0.01f)
+            return current;
+
+        if (Mathf.Abs(change) < minimumStep)
+            change = Mathf.Sign(change) * minimumStep;
+
+        return Mathf.Clamp(current + change, min, max);
+    }
+
+
+    // =========================================================
+    // PUBLIC: DELETE ONE
+    // =========================================================
+
+    public bool DeleteRiver(int id)
+    {
+        RiverInfo river = GetRiverById(id);
+
+        if (river == null)
+            return false;
+
+        UndoCarve(river.carve);
+        DestroyWaterObject(river.waterObject);
+        generatedRivers.Remove(river);
+        RefreshTerrain();
+
+        Debug.Log("WaterManager: River " + id + " deleted.");
+        return true;
+    }
+
+    public bool DeleteLake(int id)
+    {
+        LakeInfo lake = GetLakeById(id);
+
+        if (lake == null)
+            return false;
+
+        UndoCarve(lake.carve);
+        DestroyWaterObject(lake.waterObject);
+        generatedLakes.Remove(lake);
+        RefreshTerrain();
+
+        Debug.Log("WaterManager: Lake " + id + " deleted.");
+        return true;
+    }
+
+
+    // =========================================================
+    // FOOTPRINTS (used for spacing checks)
+    // =========================================================
+
+    private void UpdateRiverFootprint(RiverInfo river)
+    {
+        river.radius = river.width * 0.5f + riverBankWidth + placementMargin;
+    }
+
+    private void UpdateLakeFootprint(LakeInfo lake)
+    {
+        lake.radiusX = lake.width * 0.5f + lakeBankWidth + placementMargin;
+        lake.radiusZ = lake.length * 0.5f + lakeBankWidth + placementMargin;
+    }
+
+
+    // =========================================================
+    // BUILD (carve terrain + create water)
+    // =========================================================
+
+    private void BuildRiver(RiverInfo river)
+    {
+        float reach = river.width * 0.5f + riverBankWidth + 1f;
+
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minZ = float.MaxValue, maxZ = float.MinValue;
+
+        foreach (Vector3 p in river.path)
+        {
+            minX = Mathf.Min(minX, p.x - reach);
+            maxX = Mathf.Max(maxX, p.x + reach);
+            minZ = Mathf.Min(minZ, p.z - reach);
+            maxZ = Mathf.Max(maxZ, p.z + reach);
+        }
+
+        river.carve = CarveRegion(minX, maxX, minZ, maxZ,
+            (wx, wz, original, size) => ShapeRiverHeight(river, wx, wz, original, size));
+
+        river.waterObject = CreateRiverWater(river);
+    }
+
+    private void BuildLake(LakeInfo lake)
+    {
+        float rx = lake.width * 0.5f + lakeBankWidth + 1f;
+        float rz = lake.length * 0.5f + lakeBankWidth + 1f;
+
+        lake.carve = CarveRegion(lake.center.x - rx, lake.center.x + rx, lake.center.z - rz, lake.center.z + rz,
+            (wx, wz, original, size) => ShapeLakeHeight(lake, wx, wz, original, size));
+
+        lake.waterObject = CreateLakeWater(lake);
+    }
+
+
+    // =========================================================
+    // CARVING WITH UNDO
+    // =========================================================
+    //
+    // Each lake or river records exactly how much it changed every
+    // heightmap cell. Modifying or deleting it subtracts that change
+    // again, so mountains and other edits elsewhere are kept.
+    //
+    // =========================================================
+
+    private delegate float HeightShaper(float worldX, float worldZ, float originalNormalized, Vector3 terrainSize);
+
+    private CarveRecord CarveRegion(float minX, float maxX, float minZ, float maxZ, HeightShaper shaper)
+    {
+        TerrainData data = targetTerrain.terrainData;
+        int res = data.heightmapResolution;
+        Vector3 tp = targetTerrain.transform.position;
+        Vector3 size = data.size;
+
+        int x0 = Mathf.Clamp(Mathf.FloorToInt((minX - tp.x) / size.x * (res - 1)), 0, res - 1);
+        int x1 = Mathf.Clamp(Mathf.CeilToInt((maxX - tp.x) / size.x * (res - 1)), 0, res - 1);
+        int y0 = Mathf.Clamp(Mathf.FloorToInt((minZ - tp.z) / size.z * (res - 1)), 0, res - 1);
+        int y1 = Mathf.Clamp(Mathf.CeilToInt((maxZ - tp.z) / size.z * (res - 1)), 0, res - 1);
+
+        int w = x1 - x0 + 1;
+        int h = y1 - y0 + 1;
+
+        float[,] heights = data.GetHeights(x0, y0, w, h);
+        float[,] delta = new float[h, w];
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                float worldX = tp.x + (x0 + x) / (float)(res - 1) * size.x;
+                float worldZ = tp.z + (y0 + y) / (float)(res - 1) * size.z;
+
+                float original = heights[y, x];
+                float shaped = Mathf.Clamp01(shaper(worldX, worldZ, original, size));
+
+                delta[y, x] = shaped - original;
+                heights[y, x] = shaped;
+            }
+        }
+
+        data.SetHeights(x0, y0, heights);
+
+        CarveRecord record = new CarveRecord();
+        record.x0 = x0;
+        record.y0 = y0;
+        record.delta = delta;
+        return record;
+    }
+
+    private void UndoCarve(CarveRecord record)
+    {
+        if (record == null || record.delta == null || targetTerrain == null)
+            return;
+
+        TerrainData data = targetTerrain.terrainData;
+        int h = record.delta.GetLength(0);
+        int w = record.delta.GetLength(1);
+
+        float[,] heights = data.GetHeights(record.x0, record.y0, w, h);
+
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                heights[y, x] = Mathf.Clamp01(heights[y, x] - record.delta[y, x]);
+
+        data.SetHeights(record.x0, record.y0, heights);
+    }
+
+
+    // =========================================================
+    // RIVER BED SHAPE (same shape as before, per cell)
+    // =========================================================
+
+    private float ShapeRiverHeight(RiverInfo river, float worldX, float worldZ, float original, Vector3 terrainSize)
+    {
+        float riverRadius = river.width * 0.5f;
+        float totalWidth = riverRadius + riverBankWidth;
+
+        float distance = DistanceToRiver(new Vector3(worldX, 0f, worldZ), river.path);
+
+        if (distance <= riverRadius)
+        {
+            float t = Mathf.Clamp01(distance / riverRadius);
+            float bedShape = Mathf.SmoothStep(1f, 0.15f, t);
+            float target = original - river.depth * bedShape / terrainSize.y;
+            float edgeBlend = Mathf.SmoothStep(0f, 1f, t);
+
+            return Mathf.Lerp(target, original, edgeBlend * 0.15f);
+        }
+
+        if (distance <= totalWidth)
+        {
+            float bankT = Mathf.Clamp01((distance - riverRadius) / riverBankWidth);
+            float slope = Mathf.Sin(bankT * Mathf.PI);
+            slope = Mathf.Pow(slope, Mathf.Lerp(1f, 2.5f, riverBankSmoothness));
+
+            float noise = (Mathf.PerlinNoise(worldX * riverBankNoiseScale, worldZ * riverBankNoiseScale) - 0.5f) * 2f;
+            float bankRaise = riverBankHeight * slope * (1f + noise * riverBankNaturalVariation);
+            float raised = original + bankRaise / terrainSize.y;
+
+            return Mathf.Lerp(original, raised, Mathf.SmoothStep(0f, 1f, slope));
+        }
+
+        return original;
+    }
+
+
+    // =========================================================
+    // LAKE BED SHAPE (same shape as before, per cell)
+    // =========================================================
+
+    private float ShapeLakeHeight(LakeInfo lake, float worldX, float worldZ, float original, Vector3 terrainSize)
+    {
+        Vector3 tp = targetTerrain.transform.position;
+
+        float lakeRadiusX = lake.width * 0.5f;
+        float lakeRadiusZ = lake.length * 0.5f;
+
+        float dx = (worldX - lake.center.x) / lakeRadiusX;
+        float dz = (worldZ - lake.center.z) / lakeRadiusZ;
+        float distance = Mathf.Sqrt(dx * dx + dz * dz);
+
+        if (distance <= 1f)
+        {
+            float bedT = Mathf.SmoothStep(0f, 1f, distance);
+            float bedShape = Mathf.Lerp(1f, 0.1f, bedT);
+            float targetWorldHeight = lake.groundY - lake.depth * bedShape;
+            float originalWorldHeight = tp.y + original * terrainSize.y;
+            float blend = Mathf.SmoothStep(0f, 1f, distance);
+            float finalHeight = Mathf.Lerp(targetWorldHeight, originalWorldHeight, blend * 0.15f);
+
+            return Mathf.InverseLerp(tp.y, tp.y + terrainSize.y, finalHeight);
+        }
+
+        float outerDX = (worldX - lake.center.x) / (lakeRadiusX + lakeBankWidth);
+        float outerDZ = (worldZ - lake.center.z) / (lakeRadiusZ + lakeBankWidth);
+        float outerDistance = Mathf.Sqrt(outerDX * outerDX + outerDZ * outerDZ);
+
+        if (outerDistance <= 1f)
+        {
+            float bankT = Mathf.Clamp01(Mathf.InverseLerp(1f, 0f, outerDistance));
+            float slope = Mathf.Sin(bankT * Mathf.PI);
+            slope = Mathf.Pow(slope, Mathf.Lerp(1f, 2.5f, lakeBankSmoothness));
+
+            float noise = (Mathf.PerlinNoise(worldX * lakeBankNoiseScale, worldZ * lakeBankNoiseScale) - 0.5f) * 2f;
+            float bankRaise = lakeBankHeight * slope * (1f + noise * lakeBankNaturalVariation);
+            float raised = original + bankRaise / terrainSize.y;
+
+            return Mathf.Lerp(original, raised, Mathf.SmoothStep(0f, 1f, slope));
+        }
+
+        return original;
+    }
+
+
+    // =========================================================
+    // WATER SURFACE HEIGHT
+    // =========================================================
+    //
+    // Before: the water was placed on the carved bed, so lowering
+    // the bed lowered the water too and nothing seemed to change.
+    // Now: the water sits just below the ORIGINAL ground level and
+    // stays there when the bed is made deeper.
+    //
+    // =========================================================
+
+    private float SurfaceDrop(float depth)
+    {
+        return Mathf.Min(surfaceDrop, depth * 0.12f);
+    }
+
+
+    // =========================================================
+    // CREATE RIVER WATER
+    // =========================================================
+
+    private GameObject CreateRiverWater(RiverInfo river)
+    {
+        List<Vector3> path = river.path;
+
+        GameObject obj = new GameObject("River_Water_" + river.id);
+        obj.transform.SetParent(waterParent);
+
+        MeshFilter meshFilter = obj.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = obj.AddComponent<MeshRenderer>();
+
+        float halfWidth = river.width * 0.5f;
+        float drop = SurfaceDrop(river.depth);
+        int capSegments = 16;
+
+        List<Vector3> vertices = new List<Vector3>();
+        List<int> triangles = new List<int>();
+        List<Vector2> uvs = new List<Vector2>();
+
+        // ---------------- MAIN STRIP ----------------
+
+        for (int i = 0; i < path.Count; i++)
+        {
+            Vector3 point = path[i];
+            Vector3 direction =
+                i == 0 ? path[1] - path[0] :
+                i == path.Count - 1 ? path[i] - path[i - 1] :
+                path[i + 1] - path[i - 1];
+
+            direction.y = 0f;
+            if (direction.sqrMagnitude < 0.001f) direction = Vector3.forward;
+            direction.Normalize();
+
+            Vector3 side = new Vector3(-direction.z, 0f, direction.x);
+            float waterY = point.y - drop;
+
+            Vector3 left = point + side * halfWidth;
+            Vector3 right = point - side * halfWidth;
+            left.y = waterY;
+            right.y = waterY;
+
+            vertices.Add(left);
+            vertices.Add(right);
+
+            float u = i / (float)(path.Count - 1);
+            uvs.Add(new Vector2(u, 0f));
+            uvs.Add(new Vector2(u, 1f));
+        }
+
+        for (int i = 0; i < path.Count - 1; i++)
+        {
+            int c = i * 2;
+            int n = (i + 1) * 2;
+
+            triangles.Add(c); triangles.Add(n); triangles.Add(c + 1);
+            triangles.Add(c + 1); triangles.Add(n); triangles.Add(n + 1);
+        }
+
+        // ---------------- END CAPS ----------------
+
+        AddRiverCap(vertices, triangles, uvs, path[0], path[1] - path[0], halfWidth, path[0].y - drop, capSegments, true);
+        AddRiverCap(vertices, triangles, uvs, path[path.Count - 1], path[path.Count - 1] - path[path.Count - 2],
+                    halfWidth, path[path.Count - 1].y - drop, capSegments, false);
+
+        Mesh mesh = new Mesh();
+        mesh.name = "River_Water_Mesh_" + river.id;
+        if (vertices.Count > 65000) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        mesh.SetVertices(vertices);
+        mesh.SetTriangles(triangles, 0);
+        mesh.SetUVs(0, uvs);
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        meshFilter.sharedMesh = mesh;
+
+        ApplyWaterMaterial(meshRenderer, river.depth);
+        return obj;
+    }
+
+    private void AddRiverCap(List<Vector3> vertices, List<int> triangles, List<Vector2> uvs,
+                             Vector3 centre, Vector3 direction, float halfWidth, float waterY,
+                             int segments, bool isStart)
+    {
+        direction.y = 0f;
+        if (direction.sqrMagnitude < 0.001f) direction = Vector3.forward;
+        direction.Normalize();
+
+        Vector3 side = new Vector3(-direction.z, 0f, direction.x);
+
+        int centreIndex = vertices.Count;
+        vertices.Add(new Vector3(centre.x, waterY, centre.z));
+        uvs.Add(new Vector2(isStart ? 0f : 1f, 0.5f));
+
+        int first = vertices.Count;
+
+        for (int i = 0; i <= segments; i++)
+        {
+            float t = i / (float)segments;
+            Vector3 radial = isStart
+                ? side * Mathf.Cos(Mathf.PI + t * Mathf.PI) + direction * Mathf.Sin(Mathf.PI + t * Mathf.PI)
+                : -side * Mathf.Cos(t * Mathf.PI) + direction * Mathf.Sin(t * Mathf.PI);
+
+            Vector3 p = centre + radial * halfWidth;
+            p.y = waterY;
+            vertices.Add(p);
+            uvs.Add(new Vector2(isStart ? 0f : 1f, t));
+        }
+
+        for (int i = 0; i < segments; i++)
+        {
+            triangles.Add(centreIndex);
+            if (isStart) { triangles.Add(first + i); triangles.Add(first + i + 1); }
+            else { triangles.Add(first + i + 1); triangles.Add(first + i); }
+        }
+    }
+
+
+    // =========================================================
+    // CREATE LAKE WATER (elliptical surface)
+    // =========================================================
+
+    private GameObject CreateLakeWater(LakeInfo lake)
+    {
+        GameObject obj = new GameObject("Lake_Water_" + lake.id);
+        obj.transform.SetParent(waterParent);
+
+        float waterY = lake.groundY - SurfaceDrop(lake.depth);
+        obj.transform.position = new Vector3(lake.center.x, waterY, lake.center.z);
+
+        MeshFilter meshFilter = obj.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = obj.AddComponent<MeshRenderer>();
+
+        int segments = 48;
+        float rx = lake.width * 0.5f;
+        float rz = lake.length * 0.5f;
+
+        Vector3[] vertices = new Vector3[segments + 1];
+        Vector2[] uvs = new Vector2[segments + 1];
+        int[] triangles = new int[segments * 3];
+
+        vertices[0] = Vector3.zero;
+        uvs[0] = new Vector2(0.5f, 0.5f);
+
+        for (int i = 0; i < segments; i++)
+        {
+            float a = i / (float)segments * Mathf.PI * 2f;
+            float cx = Mathf.Cos(a);
+            float sz = Mathf.Sin(a);
+
+            vertices[i + 1] = new Vector3(cx * rx, 0f, sz * rz);
+            uvs[i + 1] = new Vector2(0.5f + cx * 0.5f, 0.5f + sz * 0.5f);
+
+            triangles[i * 3] = 0;
+            triangles[i * 3 + 1] = (i + 1) % segments + 1;
+            triangles[i * 3 + 2] = i + 1;
+        }
+
+        Mesh mesh = new Mesh();
+        mesh.name = "Lake_Water_Mesh_" + lake.id;
+        mesh.vertices = vertices;
+        mesh.uv = uvs;
+        mesh.triangles = triangles;
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        meshFilter.sharedMesh = mesh;
+
+        ApplyWaterMaterial(meshRenderer, lake.depth);
+        return obj;
+    }
+
+
+    // =========================================================
+    // MATERIAL + DEPTH COLOUR
+    // =========================================================
+
+    private void ApplyWaterMaterial(MeshRenderer renderer, float depth)
+    {
+        if (waterMaterial == null)
+        {
+            Debug.LogWarning("WaterManager: No water material assigned.");
+            return;
+        }
+
+        if (!tintWaterByDepth)
+        {
+            renderer.sharedMaterial = waterMaterial;
+            return;
+        }
+
+        // A separate material instance per water body, so each one
+        // can show its own depth.
+        Material instance = new Material(waterMaterial);
+        float t = Mathf.Clamp01(depth / Mathf.Max(depthForDeepestColor, 0.1f));
+        Color color = Color.Lerp(shallowWaterColor, deepWaterColor, t);
+
+        if (instance.HasProperty("_BaseColor")) instance.SetColor("_BaseColor", color);
+        if (instance.HasProperty("_Color")) instance.SetColor("_Color", color);
+
+        renderer.sharedMaterial = instance;
+    }
+
+    private void DestroyWaterObject(GameObject obj)
+    {
+        if (obj == null)
+            return;
+
+        MeshRenderer renderer = obj.GetComponent<MeshRenderer>();
+
+        if (renderer != null && tintWaterByDepth && renderer.sharedMaterial != null &&
+            renderer.sharedMaterial != waterMaterial)
+        {
+            Destroy(renderer.sharedMaterial);
+        }
+
+        Destroy(obj);
     }
 
 
@@ -1962,957 +2633,6 @@ public class WaterManager : MonoBehaviour
 
 
     // =========================================================
-    // SHAPE RIVER TERRAIN
-    // =========================================================
-
-    private void ShapeRiverTerrain(
-        List<Vector3> path)
-    {
-        TerrainData data =
-            targetTerrain.terrainData;
-
-        int resolution =
-            data.heightmapResolution;
-
-        float[,] heights =
-            data.GetHeights(
-                0,
-                0,
-                resolution,
-                resolution
-            );
-
-        Vector3 terrainPosition =
-            targetTerrain.transform.position;
-
-        Vector3 terrainSize =
-            data.size;
-
-        float riverRadius =
-            riverWidth * 0.5f;
-
-        float totalWidth =
-            riverRadius +
-            riverBankWidth;
-
-        for (int y = 0;
-             y < resolution;
-             y++)
-        {
-            for (int x = 0;
-                 x < resolution;
-                 x++)
-            {
-                float worldX =
-                    terrainPosition.x +
-                    x /
-                    (float)(resolution - 1) *
-                    terrainSize.x;
-
-                float worldZ =
-                    terrainPosition.z +
-                    y /
-                    (float)(resolution - 1) *
-                    terrainSize.z;
-
-                Vector3 worldPoint =
-                    new Vector3(
-                        worldX,
-                        0f,
-                        worldZ
-                    );
-
-                float distance =
-                    DistanceToRiver(
-                        worldPoint,
-                        path
-                    );
-
-                float original =
-                    heights[y, x];
-
-                if (distance <= riverRadius)
-                {
-                    float t =
-                        distance /
-                        riverRadius;
-
-                    t =
-                        Mathf.Clamp01(t);
-
-                    float bedShape =
-                        Mathf.SmoothStep(
-                            1f,
-                            0.15f,
-                            t
-                        );
-
-                    float depth =
-                        riverDepth *
-                        bedShape;
-
-                    float target =
-                        original -
-                        depth /
-                        terrainSize.y;
-
-                    float edgeBlend =
-                        Mathf.SmoothStep(
-                            0f,
-                            1f,
-                            t
-                        );
-
-                    heights[y, x] =
-                        Mathf.Lerp(
-                            target,
-                            original,
-                            edgeBlend * 0.15f
-                        );
-                }
-                else if (distance <= totalWidth)
-                {
-                    float bankDistance =
-                        distance -
-                        riverRadius;
-
-                    float bankT =
-                        bankDistance /
-                        riverBankWidth;
-
-                    bankT =
-                        Mathf.Clamp01(
-                            bankT
-                        );
-
-                    float slope =
-                        Mathf.Sin(
-                            bankT *
-                            Mathf.PI
-                        );
-
-                    slope =
-                        Mathf.Pow(
-                            slope,
-                            Mathf.Lerp(
-                                1f,
-                                2.5f,
-                                riverBankSmoothness
-                            )
-                        );
-
-                    float noise =
-                        Mathf.PerlinNoise(
-                            worldX *
-                            riverBankNoiseScale,
-                            worldZ *
-                            riverBankNoiseScale
-                        );
-
-                    noise =
-                        (noise - 0.5f) * 2f;
-
-                    float naturalAmount =
-                        1f +
-                        noise *
-                        riverBankNaturalVariation;
-
-                    float bankRaise =
-                        riverBankHeight *
-                        slope *
-                        naturalAmount;
-
-                    float raised =
-                        original +
-                        bankRaise /
-                        terrainSize.y;
-
-                    float blend =
-                        Mathf.SmoothStep(
-                            0f,
-                            1f,
-                            slope
-                        );
-
-                    heights[y, x] =
-                        Mathf.Lerp(
-                            original,
-                            raised,
-                            blend
-                        );
-                }
-            }
-        }
-
-        data.SetHeights(
-            0,
-            0,
-            heights
-        );
-    }
-
-
-    // =========================================================
-    // CREATE RIVER WATER
-    // =========================================================
-
-    private void CreateRiverWater(
-        List<Vector3> path)
-    {
-        if (path == null ||
-            path.Count < 2)
-        {
-            return;
-        }
-
-        GameObject river =
-            new GameObject(
-                "River_Water"
-            );
-
-        river.transform.SetParent(
-            waterParent
-        );
-
-        MeshFilter meshFilter =
-            river.AddComponent<MeshFilter>();
-
-        MeshRenderer meshRenderer =
-            river.AddComponent<MeshRenderer>();
-
-        Mesh mesh =
-            new Mesh();
-
-        mesh.name =
-            "Continuous_River_Water";
-
-        float halfWidth =
-            riverWidth * 0.5f;
-
-        int capSegments = 16;
-
-        List<Vector3> vertices =
-            new List<Vector3>();
-
-        List<int> triangles =
-            new List<int>();
-
-        List<Vector2> uvs =
-            new List<Vector2>();
-
-
-        // =====================================================
-        // MAIN RIVER STRIP
-        // =====================================================
-
-        for (int i = 0;
-             i < path.Count;
-             i++)
-        {
-            Vector3 point =
-                path[i];
-
-            Vector3 direction;
-
-            if (i == 0)
-            {
-                direction =
-                    path[1] -
-                    path[0];
-            }
-            else if (i ==
-                     path.Count - 1)
-            {
-                direction =
-                    path[i] -
-                    path[i - 1];
-            }
-            else
-            {
-                direction =
-                    path[i + 1] -
-                    path[i - 1];
-            }
-
-            direction.y = 0f;
-
-            if (direction.sqrMagnitude <
-                0.001f)
-            {
-                direction =
-                    Vector3.forward;
-            }
-
-            direction.Normalize();
-
-            Vector3 side =
-                new Vector3(
-                    -direction.z,
-                    0f,
-                    direction.x
-                );
-
-            side.Normalize();
-
-            float terrainHeight =
-                targetTerrain.SampleHeight(
-                    point
-                ) +
-                targetTerrain.transform.position.y;
-
-            float waterY =
-                terrainHeight +
-                waterHeightOffset;
-
-            Vector3 left =
-                point +
-                side *
-                halfWidth;
-
-            Vector3 right =
-                point -
-                side *
-                halfWidth;
-
-            left.y =
-                waterY;
-
-            right.y =
-                waterY;
-
-            vertices.Add(left);
-            vertices.Add(right);
-
-            float uvX =
-                i /
-                (float)(path.Count - 1);
-
-            uvs.Add(
-                new Vector2(
-                    uvX,
-                    0f
-                )
-            );
-
-            uvs.Add(
-                new Vector2(
-                    uvX,
-                    1f
-                )
-            );
-        }
-
-
-        // =====================================================
-        // MAIN RIVER TRIANGLES
-        // =====================================================
-
-        for (int i = 0;
-             i < path.Count - 1;
-             i++)
-        {
-            int current =
-                i * 2;
-
-            int next =
-                (i + 1) * 2;
-
-            triangles.Add(current);
-            triangles.Add(next);
-            triangles.Add(current + 1);
-
-            triangles.Add(current + 1);
-            triangles.Add(next);
-            triangles.Add(next + 1);
-        }
-
-
-        // =====================================================
-        // START CAP
-        // =====================================================
-
-        Vector3 startPoint =
-            path[0];
-
-        Vector3 startDirection =
-            path[1] -
-            path[0];
-
-        startDirection.y = 0f;
-
-        if (startDirection.sqrMagnitude <
-            0.001f)
-        {
-            startDirection =
-                Vector3.forward;
-        }
-
-        startDirection.Normalize();
-
-        Vector3 startSide =
-            new Vector3(
-                -startDirection.z,
-                0f,
-                startDirection.x
-            );
-
-        startSide.Normalize();
-
-        float startWaterY =
-            targetTerrain.SampleHeight(
-                startPoint
-            ) +
-            targetTerrain.transform.position.y +
-            waterHeightOffset;
-
-        int startCenterIndex =
-            vertices.Count;
-
-        vertices.Add(
-            new Vector3(
-                startPoint.x,
-                startWaterY,
-                startPoint.z
-            )
-        );
-
-        uvs.Add(
-            new Vector2(
-                0f,
-                0.5f
-            )
-        );
-
-        int startFirstIndex =
-            vertices.Count;
-
-        for (int i = 0;
-             i <= capSegments;
-             i++)
-        {
-            float t =
-                i /
-                (float)capSegments;
-
-            float angle =
-                Mathf.PI +
-                t * Mathf.PI;
-
-            Vector3 radial =
-                startSide *
-                Mathf.Cos(angle) +
-                startDirection *
-                Mathf.Sin(angle);
-
-            Vector3 p =
-                startPoint +
-                radial *
-                halfWidth;
-
-            p.y =
-                startWaterY;
-
-            vertices.Add(p);
-
-            uvs.Add(
-                new Vector2(
-                    0f,
-                    t
-                )
-            );
-        }
-
-        for (int i = 0;
-             i < capSegments;
-             i++)
-        {
-            int a =
-                startFirstIndex + i;
-
-            int b =
-                startFirstIndex + i + 1;
-
-            triangles.Add(
-                startCenterIndex
-            );
-
-            triangles.Add(
-                a
-            );
-
-            triangles.Add(
-                b
-            );
-        }
-
-
-        // =====================================================
-        // END CAP
-        // =====================================================
-
-        int lastIndex =
-            path.Count - 1;
-
-        Vector3 endPoint =
-            path[lastIndex];
-
-        Vector3 endDirection =
-            path[lastIndex] -
-            path[lastIndex - 1];
-
-        endDirection.y = 0f;
-
-        if (endDirection.sqrMagnitude <
-            0.001f)
-        {
-            endDirection =
-                Vector3.forward;
-        }
-
-        endDirection.Normalize();
-
-        Vector3 endSide =
-            new Vector3(
-                -endDirection.z,
-                0f,
-                endDirection.x
-            );
-
-        endSide.Normalize();
-
-        float endWaterY =
-            targetTerrain.SampleHeight(
-                endPoint
-            ) +
-            targetTerrain.transform.position.y +
-            waterHeightOffset;
-
-        int endCenterIndex =
-            vertices.Count;
-
-        vertices.Add(
-            new Vector3(
-                endPoint.x,
-                endWaterY,
-                endPoint.z
-            )
-        );
-
-        uvs.Add(
-            new Vector2(
-                1f,
-                0.5f
-            )
-        );
-
-        int endFirstIndex =
-            vertices.Count;
-
-        for (int i = 0;
-             i <= capSegments;
-             i++)
-        {
-            float t =
-                i /
-                (float)capSegments;
-
-            float angle =
-                t * Mathf.PI;
-
-            Vector3 radial =
-                -endSide *
-                Mathf.Cos(angle) +
-                endDirection *
-                Mathf.Sin(angle);
-
-            Vector3 p =
-                endPoint +
-                radial *
-                halfWidth;
-
-            p.y =
-                endWaterY;
-
-            vertices.Add(p);
-
-            uvs.Add(
-                new Vector2(
-                    1f,
-                    t
-                )
-            );
-        }
-
-        for (int i = 0;
-             i < capSegments;
-             i++)
-        {
-            int a =
-                endFirstIndex + i;
-
-            int b =
-                endFirstIndex + i + 1;
-
-            triangles.Add(
-                endCenterIndex
-            );
-
-            triangles.Add(
-                b
-            );
-
-            triangles.Add(
-                a
-            );
-        }
-
-
-        // =====================================================
-        // APPLY MESH
-        // =====================================================
-
-        if (vertices.Count >
-            65000)
-        {
-            mesh.indexFormat =
-                UnityEngine.Rendering.IndexFormat.UInt32;
-        }
-
-        mesh.SetVertices(
-            vertices
-        );
-
-        mesh.SetTriangles(
-            triangles,
-            0
-        );
-
-        mesh.SetUVs(
-            0,
-            uvs
-        );
-
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-
-        meshFilter.sharedMesh =
-            mesh;
-
-
-        // =====================================================
-        // MATERIAL
-        // =====================================================
-
-        if (waterMaterial != null)
-        {
-            meshRenderer.sharedMaterial =
-                waterMaterial;
-        }
-        else
-        {
-            Debug.LogWarning(
-                "WaterManager: No water material assigned."
-            );
-        }
-    }
-
-
-    // =========================================================
-    // SHAPE LAKE TERRAIN
-    // =========================================================
-
-    private void ShapeLakeTerrain(
-        Vector3 center)
-    {
-        TerrainData data =
-            targetTerrain.terrainData;
-
-        int resolution =
-            data.heightmapResolution;
-
-        float[,] heights =
-            data.GetHeights(
-                0,
-                0,
-                resolution,
-                resolution
-            );
-
-        Vector3 terrainPosition =
-            targetTerrain.transform.position;
-
-        Vector3 terrainSize =
-            data.size;
-
-        float lakeRadiusX =
-            lakeWidth * 0.5f;
-
-        float lakeRadiusZ =
-            lakeLength * 0.5f;
-
-        float bankRadiusX =
-            lakeRadiusX +
-            lakeBankWidth;
-
-        float bankRadiusZ =
-            lakeRadiusZ +
-            lakeBankWidth;
-
-        float centerHeight =
-            targetTerrain.SampleHeight(
-                center
-            ) +
-            terrainPosition.y;
-
-        for (int y = 0;
-             y < resolution;
-             y++)
-        {
-            for (int x = 0;
-                 x < resolution;
-                 x++)
-            {
-                float worldX =
-                    terrainPosition.x +
-                    x /
-                    (float)(resolution - 1) *
-                    terrainSize.x;
-
-                float worldZ =
-                    terrainPosition.z +
-                    y /
-                    (float)(resolution - 1) *
-                    terrainSize.z;
-
-                float dx =
-                    (worldX - center.x) /
-                    lakeRadiusX;
-
-                float dz =
-                    (worldZ - center.z) /
-                    lakeRadiusZ;
-
-                float distance =
-                    Mathf.Sqrt(
-                        dx * dx +
-                        dz * dz
-                    );
-
-                float original =
-                    heights[y, x];
-
-                if (distance <= 1f)
-                {
-                    float bedT =
-                        Mathf.SmoothStep(
-                            0f,
-                            1f,
-                            distance
-                        );
-
-                    float bedShape =
-                        Mathf.Lerp(
-                            1f,
-                            0.1f,
-                            bedT
-                        );
-
-                    float depth =
-                        lakeDepth *
-                        bedShape;
-
-                    float targetWorldHeight =
-                        centerHeight -
-                        depth;
-
-                    float originalWorldHeight =
-                        terrainPosition.y +
-                        original *
-                        terrainSize.y;
-
-                    float blend =
-                        Mathf.SmoothStep(
-                            0f,
-                            1f,
-                            distance
-                        );
-
-                    float finalHeight =
-                        Mathf.Lerp(
-                            targetWorldHeight,
-                            originalWorldHeight,
-                            blend * 0.15f
-                        );
-
-                    heights[y, x] =
-                        Mathf.InverseLerp(
-                            terrainPosition.y,
-                            terrainPosition.y +
-                            terrainSize.y,
-                            finalHeight
-                        );
-                }
-                else
-                {
-                    float outerDX =
-                        (worldX - center.x) /
-                        bankRadiusX;
-
-                    float outerDZ =
-                        (worldZ - center.z) /
-                        bankRadiusZ;
-
-                    float outerDistance =
-                        Mathf.Sqrt(
-                            outerDX * outerDX +
-                            outerDZ * outerDZ
-                        );
-
-                    if (outerDistance <= 1f)
-                    {
-                        float bankT =
-                            Mathf.InverseLerp(
-                                1f,
-                                0f,
-                                outerDistance
-                            );
-
-                        bankT =
-                            Mathf.Clamp01(
-                                bankT
-                            );
-
-                        float slope =
-                            Mathf.Sin(
-                                bankT *
-                                Mathf.PI
-                            );
-
-                        slope =
-                            Mathf.Pow(
-                                slope,
-                                Mathf.Lerp(
-                                    1f,
-                                    2.5f,
-                                    lakeBankSmoothness
-                                )
-                            );
-
-                        float noise =
-                            Mathf.PerlinNoise(
-                                worldX *
-                                lakeBankNoiseScale,
-                                worldZ *
-                                lakeBankNoiseScale
-                            );
-
-                        noise =
-                            (noise - 0.5f) * 2f;
-
-                        float naturalAmount =
-                            1f +
-                            noise *
-                            lakeBankNaturalVariation;
-
-                        float bankRaise =
-                            lakeBankHeight *
-                            slope *
-                            naturalAmount;
-
-                        float raised =
-                            original +
-                            bankRaise /
-                            terrainSize.y;
-
-                        float blend =
-                            Mathf.SmoothStep(
-                                0f,
-                                1f,
-                                slope
-                            );
-
-                        heights[y, x] =
-                            Mathf.Lerp(
-                                original,
-                                raised,
-                                blend
-                            );
-                    }
-                }
-            }
-        }
-
-        data.SetHeights(
-            0,
-            0,
-            heights
-        );
-    }
-
-
-    // =========================================================
-    // CREATE LAKE WATER
-    // =========================================================
-
-    private void CreateLakeWater(
-        Vector3 center)
-    {
-        float waterY =
-            targetTerrain.SampleHeight(
-                center
-            ) +
-            targetTerrain.transform.position.y +
-            waterHeightOffset;
-
-        GameObject lake =
-            GameObject.CreatePrimitive(
-                PrimitiveType.Plane
-            );
-
-        lake.name =
-            "Lake_Water";
-
-        lake.transform.SetParent(
-            waterParent
-        );
-
-        lake.transform.position =
-            new Vector3(
-                center.x,
-                waterY,
-                center.z
-            );
-
-        lake.transform.rotation =
-            Quaternion.identity;
-
-        lake.transform.localScale =
-            new Vector3(
-                lakeWidth / 10f,
-                1f,
-                lakeLength / 10f
-            );
-
-        if (waterMaterial != null)
-        {
-            Renderer renderer =
-                lake.GetComponent<Renderer>();
-
-            renderer.sharedMaterial =
-                waterMaterial;
-        }
-
-        Collider collider =
-            lake.GetComponent<Collider>();
-
-        if (collider != null)
-        {
-            Destroy(collider);
-        }
-    }
-
-
-    // =========================================================
     // TERRAIN CENTER
     // =========================================================
 
@@ -2971,53 +2691,6 @@ public class WaterManager : MonoBehaviour
         }
     }
 
-
-    // =========================================================
-    // DELETE WATER
-    // =========================================================
-
-    public void DeleteWater()
-    {
-        DeleteWaterObjects();
-
-        RestoreTerrain();
-
-        generatedLakes.Clear();
-        generatedRivers.Clear();
-
-        Debug.Log(
-            "WaterManager: All water deleted and terrain restored."
-        );
-    }
-
-
-    // =========================================================
-    // DELETE WATER OBJECTS
-    // =========================================================
-
-    private void DeleteWaterObjects()
-    {
-        if (waterParent != null)
-        {
-            Destroy(
-                waterParent.gameObject
-            );
-
-            waterParent = null;
-        }
-
-        GameObject existing =
-            GameObject.Find(
-                "Generated_Water"
-            );
-
-        if (existing != null)
-        {
-            Destroy(existing);
-        }
-    }
-
-
     // =========================================================
     // RESTORE TERRAIN
     // =========================================================
@@ -3051,6 +2724,55 @@ public class WaterManager : MonoBehaviour
         RefreshTerrain();
     }
 
+    // =========================================================
+    // DELETE WATER (all)
+    // =========================================================
+
+    public void DeleteWater()
+    {
+        // Undo each carve in reverse order, so other terrain edits
+        // (for example mountains created later) are kept.
+        for (int i = generatedRivers.Count - 1; i >= 0; i--)
+            if (generatedRivers[i] != null) UndoCarve(generatedRivers[i].carve);
+
+        for (int i = generatedLakes.Count - 1; i >= 0; i--)
+            if (generatedLakes[i] != null) UndoCarve(generatedLakes[i].carve);
+
+        DeleteWaterObjects();
+
+        generatedLakes.Clear();
+        generatedRivers.Clear();
+
+        RefreshTerrain();
+
+        Debug.Log("WaterManager: All water deleted.");
+    }
+
+
+    // =========================================================
+    // DELETE WATER OBJECTS
+    // =========================================================
+
+    private void DeleteWaterObjects()
+    {
+        foreach (RiverInfo river in generatedRivers)
+            if (river != null) DestroyWaterObject(river.waterObject);
+
+        foreach (LakeInfo lake in generatedLakes)
+            if (lake != null) DestroyWaterObject(lake.waterObject);
+
+        if (waterParent != null)
+        {
+            Destroy(waterParent.gameObject);
+            waterParent = null;
+        }
+
+        GameObject existing = GameObject.Find("Generated_Water");
+
+        if (existing != null)
+            Destroy(existing);
+    }
+
 
     // =========================================================
     // CONTEXT MENU
@@ -3062,13 +2784,31 @@ public class WaterManager : MonoBehaviour
         CreateRiver();
     }
 
-
     [ContextMenu("Create Lake")]
     private void DebugCreateLake()
     {
         CreateLake();
     }
 
+    [ContextMenu("Make Last Lake Deeper")]
+    private void DebugDeeperLake()
+    {
+        if (generatedLakes.Count > 0)
+        {
+            LakeInfo lake = generatedLakes[generatedLakes.Count - 1];
+            ModifyLake(lake.id, lake.width, lake.length, lake.depth + 1f);
+        }
+    }
+
+    [ContextMenu("Make Last River Deeper")]
+    private void DebugDeeperRiver()
+    {
+        if (generatedRivers.Count > 0)
+        {
+            RiverInfo river = generatedRivers[generatedRivers.Count - 1];
+            ModifyRiver(river.id, river.width, river.depth + 1f);
+        }
+    }
 
     [ContextMenu("Delete Water")]
     private void DebugDeleteWater()
